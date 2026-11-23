@@ -2,16 +2,19 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { VRButton } from 'three/examples/jsm/webxr/VRButton.js'
 import {
+  CatController,
   ENTITY_SPECS,
   GRID,
   LEVEL_01,
   ROOM_SIZE,
   isInBounds,
   loadLevel,
+  type CatState,
   type EntityKind,
   type LoadedLevel,
 } from '@toot/sim-core'
-import { createGrayboxMesh } from './grayboxMeshes'
+import { createCatMesh, createGrayboxMesh, type CatMeshRig } from './grayboxMeshes'
+import { InputManager } from './inputState'
 
 export interface HoverCellInfo {
   readonly x: number
@@ -32,10 +35,13 @@ export interface StageStats {
 export interface ThreeStageCallbacks {
   onHoverCell?: (info: HoverCellInfo | null) => void
   onStats?: (stats: StageStats) => void
+  onCatState?: (state: CatState) => void
 }
 
+const WORLD_UP = new THREE.Vector3(0, 1, 0)
+
 /**
- * Three.js 場景外殼：renderer / camera / 16×10×16 房間 / 格線 / 灰盒物件 / WebXR。
+ * Three.js 場景外殼：renderer / camera / 16×10×16 房間 / 格線 / 灰盒物件 / 貓咪控制 / WebXR。
  * 主迴圈與模擬資料不放進 Vue 響應式，只透過 callback 節流同步 HUD。
  */
 export class ThreeStage {
@@ -47,6 +53,10 @@ export class ThreeStage {
   private readonly resizeObserver: ResizeObserver
 
   private readonly level: LoadedLevel
+  private readonly catController: CatController
+  private readonly catRig: CatMeshRig
+  private readonly input: InputManager
+
   private readonly entityGroup = new THREE.Group()
   private readonly gridHelperGroup = new THREE.Group()
   private readonly hoverTile: THREE.Mesh
@@ -55,9 +65,14 @@ export class ThreeStage {
   private readonly pointerNdc = new THREE.Vector2()
   private readonly floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
   private readonly hitPoint = new THREE.Vector3()
+  private readonly camForward = new THREE.Vector3()
+  private readonly camRight = new THREE.Vector3()
 
   private lastHoverKey = ''
   private lastStatsTime = 0
+  private lastCatHudTime = 0
+  private lastFrameTime = performance.now()
+  private prevCatPos = new THREE.Vector3()
 
   constructor(
     private readonly container: HTMLElement,
@@ -76,12 +91,24 @@ export class ThreeStage {
     this.vrButton = VRButton.createButton(this.renderer)
     container.appendChild(this.vrButton)
 
+    this.level = loadLevel(LEVEL_01)
+    this.catController = new CatController(this.level.grid, this.level.cat)
+    const initialCat = this.catController.getState()
+    this.prevCatPos.set(initialCat.position.x, initialCat.position.y, initialCat.position.z)
+
     this.camera = new THREE.PerspectiveCamera(50, w / h, 0.1, 150)
-    this.camera.position.set(ROOM_SIZE.width + 6, ROOM_SIZE.height + 5, ROOM_SIZE.depth + 7)
+    this.camera.position.set(
+      initialCat.position.x + 7,
+      initialCat.position.y + 7.5,
+      initialCat.position.z + 9,
+    )
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement)
-    this.controls.target.set(ROOM_SIZE.width / 2, ROOM_SIZE.height * 0.25, ROOM_SIZE.depth / 2)
+    this.controls.target.set(initialCat.position.x, initialCat.position.y + 0.8, initialCat.position.z)
     this.controls.enableDamping = true
+    this.controls.minDistance = 4
+    this.controls.maxDistance = 32
+    this.controls.maxPolarAngle = Math.PI * 0.48
     this.controls.mouseButtons = {
       LEFT: null as unknown as THREE.MOUSE,
       MIDDLE: THREE.MOUSE.PAN,
@@ -89,9 +116,9 @@ export class ThreeStage {
     }
     this.controls.update()
 
-    this.scene.background = new THREE.Color(0x0f172a)
+    this.input = new InputManager(this.renderer.domElement)
 
-    this.level = loadLevel(LEVEL_01)
+    this.scene.background = new THREE.Color(0x0f172a)
 
     this.buildLights()
     this.buildRoom()
@@ -99,6 +126,7 @@ export class ThreeStage {
     this.hoverTile = this.buildHoverTile()
     this.scene.add(this.hoverTile)
 
+    this.catRig = createCatMesh(this.level.cat)
     this.scene.add(this.entityGroup)
     this.syncEntitiesFromGrid()
 
@@ -108,11 +136,24 @@ export class ThreeStage {
     this.resizeObserver = new ResizeObserver(() => this.onResize())
     this.resizeObserver.observe(container)
 
+    this.callbacks.onCatState?.(initialCat)
     this.renderer.setAnimationLoop(() => this.tick())
   }
 
   setGridVisible(visible: boolean): void {
     this.gridHelperGroup.visible = visible
+  }
+
+  setVirtualMove(right: number, forward: number): void {
+    this.input.setVirtualMove(right, forward)
+  }
+
+  triggerJump(): void {
+    this.input.triggerJump()
+  }
+
+  setVirtualFart(held: boolean): void {
+    this.input.setVirtualFart(held)
   }
 
   private buildLights(): void {
@@ -164,12 +205,10 @@ export class ThreeStage {
   private buildGridHelpers(): void {
     const { width, height, depth } = ROOM_SIZE
 
-    // 地板 16 × 16 格線
     const floorGrid = new THREE.GridHelper(width, GRID.NX, 0x64748b, 0x94a3b8)
     floorGrid.position.set(width / 2, 0.008, depth / 2)
     this.gridHelperGroup.add(floorGrid)
 
-    // 16 × 10 × 16 空間邊界線框
     const roomWire = new THREE.LineSegments(
       new THREE.EdgesGeometry(new THREE.BoxGeometry(width, height, depth)),
       new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.45 }),
@@ -177,7 +216,6 @@ export class ThreeStage {
     roomWire.position.set(width / 2, height / 2, depth / 2)
     this.gridHelperGroup.add(roomWire)
 
-    // 原點座標軸提示（紅 X / 綠 Y / 藍 Z）
     const axes = new THREE.AxesHelper(2.2)
     axes.position.set(0, 0.02, 0)
     this.gridHelperGroup.add(axes)
@@ -204,7 +242,11 @@ export class ThreeStage {
   private syncEntitiesFromGrid(): void {
     this.entityGroup.clear()
     for (const entity of this.level.grid.getAllEntities()) {
-      this.entityGroup.add(createGrayboxMesh(entity))
+      if (entity.id === this.level.cat.id) {
+        this.entityGroup.add(this.catRig.group)
+      } else {
+        this.entityGroup.add(createGrayboxMesh(entity))
+      }
     }
   }
 
@@ -262,10 +304,59 @@ export class ThreeStage {
   }
 
   private tick(): void {
+    const now = performance.now()
+    const dt = (now - this.lastFrameTime) / 1000
+    this.lastFrameTime = now
+
+    // 計算鏡頭投影到地面的「前方」與「右方」向量
+    this.camera.getWorldDirection(this.camForward)
+    this.camForward.y = 0
+    if (this.camForward.lengthSq() < 1e-6) {
+      this.camForward.set(0, 0, -1)
+    } else {
+      this.camForward.normalize()
+    }
+    this.camRight.crossVectors(this.camForward, WORLD_UP).normalize()
+
+    const raw = this.input.consumeSnapshot()
+    const moveX = this.camForward.x * raw.forward + this.camRight.x * raw.right
+    const moveZ = this.camForward.z * raw.forward + this.camRight.z * raw.right
+
+    const catState = this.catController.step(
+      {
+        moveX,
+        moveZ,
+        jumpJustPressed: raw.jumpJustPressed,
+        fartHeld: raw.fartHeld,
+      },
+      dt,
+    )
+
+    // 同步貓咪外觀與鏡頭跟隨
+    const { x, y, z } = catState.position
+    this.catRig.group.position.set(x, y, z)
+    this.catRig.group.rotation.y = catState.facingYaw
+    this.catRig.setFarting(catState.isFarting)
+
+    const dx = x - this.prevCatPos.x
+    const dy = y - this.prevCatPos.y
+    const dz = z - this.prevCatPos.z
+    this.controls.target.x += dx
+    this.controls.target.y += dy
+    this.controls.target.z += dz
+    this.camera.position.x += dx
+    this.camera.position.y += dy
+    this.camera.position.z += dz
+    this.prevCatPos.set(x, y, z)
+
     this.controls.update()
     this.renderer.render(this.scene, this.camera)
 
-    const now = performance.now()
+    if (now - this.lastCatHudTime >= 100) {
+      this.lastCatHudTime = now
+      this.callbacks.onCatState?.(catState)
+    }
+
     if (now - this.lastStatsTime >= 250) {
       this.lastStatsTime = now
       this.callbacks.onStats?.({
@@ -278,6 +369,7 @@ export class ThreeStage {
 
   dispose(): void {
     this.renderer.setAnimationLoop(null)
+    this.input.dispose()
     this.renderer.domElement.removeEventListener('pointermove', this.onPointerMove)
     this.renderer.domElement.removeEventListener('pointerleave', this.onPointerLeave)
     this.resizeObserver.disconnect()

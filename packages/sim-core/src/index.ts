@@ -36,3 +36,10 @@ export {
   type LevelFurniturePlacement,
   type LoadedLevel,
 } from './level'
+
+export {
+  CatController,
+  type CatInput,
+  type CatState,
+  type Vec3,
+} from './catController'

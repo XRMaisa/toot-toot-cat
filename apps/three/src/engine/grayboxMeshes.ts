@@ -35,8 +35,55 @@ function addBoxWithEdges(
   group.add(edges)
 }
 
-/** 依 sim-core 的 GridEntity 建立對應的灰盒 Three.js 物件（原點對齊格子最小角） */
+export interface CatMeshRig {
+  readonly group: THREE.Group
+  setFarting(active: boolean): void
+}
+
+/** 建立可旋轉與顯示放屁回饋的貓咪灰盒（原點在底面中心，面朝 +Z） */
+export function createCatMesh(entity: GridEntity): CatMeshRig {
+  const group = new THREE.Group()
+  group.name = `cat#${entity.id}`
+  group.userData.entityId = entity.id
+  group.position.set(entity.origin.x + 0.5, entity.origin.y, entity.origin.z + 0.5)
+
+  const bodyMat = new THREE.MeshStandardMaterial({
+    color: ENTITY_COLORS.cat,
+    roughness: 0.6,
+    emissive: 0x000000,
+  })
+
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.42, 24, 16), bodyMat)
+  body.position.set(0, 0.42, 0)
+  body.castShadow = true
+  body.receiveShadow = true
+  group.add(body)
+
+  // 小耳朵讓玩家一眼看出貓咪面向（+Z 為前方）
+  const earGeo = new THREE.ConeGeometry(0.11, 0.2, 4)
+  for (const side of [-1, 1]) {
+    const ear = new THREE.Mesh(earGeo, bodyMat)
+    ear.position.set(side * 0.2, 0.82, 0.12)
+    ear.rotation.z = -side * 0.2
+    ear.castShadow = true
+    group.add(ear)
+  }
+
+  return {
+    group,
+    setFarting(active: boolean) {
+      bodyMat.emissive.setHex(active ? 0x4d7c0f : 0x000000)
+      body.scale.set(active ? 1.08 : 1, active ? 0.92 : 1, active ? 1.08 : 1)
+    },
+  }
+}
+
+/** 依 sim-core 的 GridEntity 建立對應的灰盒 Three.js 物件（家具與人原點對齊格子最小角） */
 export function createGrayboxMesh(entity: GridEntity): THREE.Group {
+  if (entity.kind === 'cat') {
+    return createCatMesh(entity).group
+  }
+
   const group = new THREE.Group()
   group.name = `${entity.kind}#${entity.id}`
   group.userData.entityId = entity.id
@@ -45,16 +92,7 @@ export function createGrayboxMesh(entity: GridEntity): THREE.Group {
   const color = ENTITY_COLORS[entity.kind]
   const { x: sx, y: sy, z: sz } = ENTITY_SPECS[entity.kind].size
 
-  if (entity.kind === 'cat') {
-    const mesh = new THREE.Mesh(
-      new THREE.SphereGeometry(0.46, 24, 16),
-      new THREE.MeshStandardMaterial({ color, roughness: 0.6 }),
-    )
-    mesh.position.set(0.5, 0.46, 0.5)
-    mesh.castShadow = true
-    mesh.receiveShadow = true
-    group.add(mesh)
-  } else if (entity.kind === 'human') {
+  if (entity.kind === 'human') {
     const bodyMat = new THREE.MeshStandardMaterial({ color, roughness: 0.65 })
     const headMat = new THREE.MeshStandardMaterial({ color: 0xfde68a, roughness: 0.6 })
 
