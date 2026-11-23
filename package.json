@@ -1,0 +1,19 @@
+{
+  "name": "toot-toot-cat",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Q 版貓咪放屁 × 工業數位孿生 WebXR 小遊戲（Three.js / Babylon.js 雙引擎比較）",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @toot/app-three",
+    "dev:three": "npm run dev -w @toot/app-three",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
+  }
+}
