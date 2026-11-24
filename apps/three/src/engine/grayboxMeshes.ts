@@ -4,6 +4,7 @@ import {
   type EntityKind,
   type GridEntity,
   type HumanAlertLevel,
+  type HumanState,
 } from '@toot/sim-core'
 
 const ENTITY_COLORS: Record<EntityKind, number> = {
@@ -73,6 +74,7 @@ export interface CatMeshRig {
 export interface HumanMeshRig {
   readonly group: THREE.Group
   setAlert(level: HumanAlertLevel): void
+  updateState(state: HumanState, timeSec: number): void
   dispose(): void
 }
 
@@ -114,36 +116,45 @@ export function createCatMesh(entity: GridEntity): CatMeshRig {
   }
 }
 
-/** 建立兩等身人類灰盒與頭頂 ❓ / 💢 反應標記 */
+/** 建立兩等身人類灰盒（原點在底面中心，支援站 / 坐 / 睡姿勢與頭頂 ❓ / 💢 標記） */
 export function createHumanMesh(entity: GridEntity): HumanMeshRig {
   const group = new THREE.Group()
   group.name = `human#${entity.id}`
   group.userData.entityId = entity.id
-  group.position.set(entity.origin.x, entity.origin.y, entity.origin.z)
+  group.position.set(entity.origin.x + 0.5, entity.origin.y, entity.origin.z + 0.5)
 
   const bodyMat = new THREE.MeshStandardMaterial({ color: ENTITY_COLORS.human, roughness: 0.65 })
   const headMat = new THREE.MeshStandardMaterial({ color: 0xfde68a, roughness: 0.6 })
+  const eyeMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.4 })
 
-  // 下方兩格（y = 0 ~ 2）：橢圓身體
   const body = new THREE.Mesh(new THREE.SphereGeometry(0.45, 24, 16), bodyMat)
   body.scale.set(0.88, 2.22, 0.88)
-  body.position.set(0.5, 1.0, 0.5)
+  body.position.set(0, 1.0, 0)
   body.castShadow = true
   body.receiveShadow = true
   group.add(body)
 
-  // 最上方一格（y = 2 ~ 3）：圓形頭部
+  const headGroup = new THREE.Group()
+  headGroup.position.set(0, 2.5, 0)
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.42, 24, 16), headMat)
-  head.position.set(0.5, 2.5, 0.5)
   head.castShadow = true
   head.receiveShadow = true
-  group.add(head)
+  headGroup.add(head)
+
+  // 兩顆小眼睛標示面向（+Z）
+  const eyeGeo = new THREE.SphereGeometry(0.055, 8, 8)
+  for (const side of [-1, 1]) {
+    const eye = new THREE.Mesh(eyeGeo, eyeMat)
+    eye.position.set(side * 0.14, 0.05, 0.37)
+    headGroup.add(eye)
+  }
+  group.add(headGroup)
 
   const texSuspicious = createEmojiSpriteTexture('?', '#f59e0b')
   const texCaught = createEmojiSpriteTexture('!', '#ef4444')
   const badgeMat = new THREE.SpriteMaterial({ map: texSuspicious, transparent: true })
   const badge = new THREE.Sprite(badgeMat)
-  badge.position.set(0.5, 3.45, 0.5)
+  badge.position.set(0, 3.45, 0)
   badge.scale.set(0.75, 0.75, 1)
   badge.visible = false
   group.add(badge)
@@ -168,6 +179,35 @@ export function createHumanMesh(entity: GridEntity): HumanMeshRig {
         badgeMat.map = texCaught
         badgeMat.needsUpdate = true
         headMat.emissive.setHex(0x991b1b)
+      }
+    },
+    updateState(state: HumanState, timeSec: number) {
+      group.position.set(state.position.x, state.position.y, state.position.z)
+      group.rotation.y = state.facingYaw
+
+      if (state.posture === 'sleep') {
+        body.rotation.set(Math.PI / 2, 0, 0)
+        body.scale.set(0.88, 2.22, 0.88)
+        body.position.set(0, 0.42, 1.45)
+        headGroup.position.set(0, 0.46, 0.05)
+        headGroup.rotation.set(-Math.PI / 2, 0, 0)
+        badge.position.set(0, 1.45, 0.05)
+      } else if (state.posture === 'sit') {
+        const petBob = state.activity === 'petCat' ? Math.sin(timeSec * 18) * 0.05 : 0
+        body.rotation.set(0, 0, 0)
+        body.scale.set(0.96, 1.22, 0.96)
+        body.position.set(0, 0.55, 0)
+        headGroup.position.set(0, 1.48 + petBob, 0)
+        headGroup.rotation.set(state.activity === 'petCat' ? 0.3 : 0, 0, 0)
+        badge.position.set(0, 2.45, 0)
+      } else {
+        const walkBob = state.isMoving ? Math.abs(Math.sin(timeSec * 9)) * 0.08 : 0
+        body.rotation.set(0, 0, 0)
+        body.scale.set(0.88, 2.22, 0.88)
+        body.position.set(0, 1.0 + walkBob, 0)
+        headGroup.position.set(0, 2.5 + walkBob, 0)
+        headGroup.rotation.set(0, 0, 0)
+        badge.position.set(0, 3.45 + walkBob, 0)
       }
     },
     dispose() {

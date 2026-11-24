@@ -5,6 +5,7 @@ import {
   CatController,
   ENTITY_SPECS,
   GRID,
+  HumanController,
   LEVEL_01,
   ROOM_SIZE,
   StinkSystem,
@@ -12,6 +13,7 @@ import {
   loadLevel,
   type CatState,
   type EntityKind,
+  type HumanState,
   type LoadedLevel,
   type StinkSnapshot,
 } from '@toot/sim-core'
@@ -45,13 +47,14 @@ export interface ThreeStageCallbacks {
   onHoverCell?: (info: HoverCellInfo | null) => void
   onStats?: (stats: StageStats) => void
   onCatState?: (state: CatState) => void
+  onHumanState?: (state: HumanState) => void
   onStinkState?: (snapshot: StinkSnapshot) => void
 }
 
 const WORLD_UP = new THREE.Vector3(0, 1, 0)
 
 /**
- * Three.js 場景外殼：renderer / camera / 16×10×16 房間 / 灰盒物件 / 貓咪控制 / 臭氣粒子與熱力圖 / WebXR。
+ * Three.js 場景外殼：房間 / 灰盒物件 / 貓咪控制 / 人類 AI / 臭氣粒子與熱力圖 / WebXR。
  * 主迴圈與模擬資料不放進 Vue 響應式，只透過 callback 節流同步 HUD。
  */
 export class ThreeStage {
@@ -64,6 +67,7 @@ export class ThreeStage {
 
   private readonly level: LoadedLevel
   private readonly catController: CatController
+  private readonly humanController: HumanController
   private readonly catRig: CatMeshRig
   private readonly humanRig: HumanMeshRig
   private readonly stinkSystem = new StinkSystem()
@@ -86,6 +90,7 @@ export class ThreeStage {
   private lastHudTime = 0
   private lastFrameTime = performance.now()
   private prevCatPos = new THREE.Vector3()
+  private lastCatGrounded = true
 
   constructor(
     private readonly container: HTMLElement,
@@ -106,7 +111,14 @@ export class ThreeStage {
 
     this.level = loadLevel(LEVEL_01)
     this.catController = new CatController(this.level.grid, this.level.cat)
+    this.humanController = new HumanController(
+      this.level.grid,
+      this.level.human,
+      this.level.cat,
+    )
+
     const initialCat = this.catController.getState()
+    const initialHuman = this.humanController.getState()
     this.prevCatPos.set(initialCat.position.x, initialCat.position.y, initialCat.position.z)
 
     this.camera = new THREE.PerspectiveCamera(50, w / h, 0.1, 150)
@@ -157,6 +169,7 @@ export class ThreeStage {
     this.resizeObserver.observe(container)
 
     this.callbacks.onCatState?.(initialCat)
+    this.callbacks.onHumanState?.(initialHuman)
     this.callbacks.onStinkState?.(this.stinkSystem.getSnapshot())
     this.renderer.setAnimationLoop(() => this.tick())
   }
@@ -337,10 +350,32 @@ export class ThreeStage {
 
   private tick(): void {
     const now = performance.now()
+    const timeSec = now / 1000
     const dt = (now - this.lastFrameTime) / 1000
     this.lastFrameTime = now
 
-    // 1. 計算鏡頭投影到地面的「前方」與「右方」向量
+    // 1. 更新人類 AI（5 秒換行動、A* 找路、被貓擋住摸貓 1 秒）
+    const humanState = this.humanController.step(this.prevCatPos, this.lastCatGrounded, dt)
+    const isBeingPetted = humanState.petCatHoldPos !== null
+
+    if (humanState.petCatHoldPos) {
+      const petBounce = Math.abs(Math.sin(timeSec * 18)) * 0.05
+      this.catController.teleportTo(
+        humanState.petCatHoldPos.x,
+        humanState.petCatHoldPos.y + petBounce,
+        humanState.petCatHoldPos.z,
+        false,
+      )
+    } else if (humanState.releaseCatCell) {
+      this.catController.teleportTo(
+        humanState.releaseCatCell.x + 0.5,
+        humanState.releaseCatCell.y,
+        humanState.releaseCatCell.z + 0.5,
+        true,
+      )
+    }
+
+    // 2. 計算鏡頭投影到地面的「前方」與「右方」向量
     this.camera.getWorldDirection(this.camForward)
     this.camForward.y = 0
     if (this.camForward.lengthSq() < 1e-6) {
@@ -350,7 +385,7 @@ export class ThreeStage {
     }
     this.camRight.crossVectors(this.camForward, WORLD_UP).normalize()
 
-    // 2. 更新貓咪移動與碰撞
+    // 3. 更新貓咪移動與碰撞（被抱起來摸時鎖定移動與放屁）
     const raw = this.input.consumeSnapshot()
     const moveX = this.camForward.x * raw.forward + this.camRight.x * raw.right
     const moveZ = this.camForward.z * raw.forward + this.camRight.z * raw.right
@@ -361,23 +396,23 @@ export class ThreeStage {
         moveZ,
         jumpJustPressed: raw.jumpJustPressed,
         fartHeld: raw.fartHeld,
+        locked: isBeingPetted,
       },
       dt,
     )
+    this.lastCatGrounded = catState.grounded
 
     const { x, y, z } = catState.position
     this.catRig.group.position.set(x, y, z)
     this.catRig.group.rotation.y = catState.facingYaw
     this.catRig.setFarting(catState.isFarting)
 
-    // 3. 更新臭氣粒子模擬與人類頭部吸入
+    // 4. 更新人類外觀姿勢
+    this.humanRig.updateState(humanState, timeSec)
+
+    // 5. 更新臭氣粒子模擬與人類頭部吸入（隨站 / 坐 / 睡動態改變頭部格子）
     const backX = -Math.sin(catState.facingYaw)
     const backZ = -Math.cos(catState.facingYaw)
-    const humanHeadCell = {
-      x: this.level.human.origin.x,
-      y: this.level.human.origin.y + 2,
-      z: this.level.human.origin.z,
-    }
     const stinkSnapshot = this.stinkSystem.step(
       this.level.grid,
       {
@@ -388,13 +423,13 @@ export class ThreeStage {
         dirX: backX,
         dirZ: backZ,
       },
-      humanHeadCell,
+      humanState.headCell,
       dt,
     )
     this.stinkVisuals.update(this.stinkSystem)
     this.humanRig.setAlert(stinkSnapshot.alertLevel)
 
-    // 4. 鏡頭跟隨貓咪
+    // 6. 鏡頭跟隨貓咪
     const dx = x - this.prevCatPos.x
     const dy = y - this.prevCatPos.y
     const dz = z - this.prevCatPos.z
@@ -409,10 +444,11 @@ export class ThreeStage {
     this.controls.update()
     this.renderer.render(this.scene, this.camera)
 
-    // 5. 節流同步 HUD
+    // 7. 節流同步 HUD
     if (now - this.lastHudTime >= 100) {
       this.lastHudTime = now
       this.callbacks.onCatState?.(catState)
+      this.callbacks.onHumanState?.(humanState)
       this.callbacks.onStinkState?.(stinkSnapshot)
     }
 

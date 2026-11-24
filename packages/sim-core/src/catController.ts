@@ -15,6 +15,8 @@ export interface CatInput {
   jumpJustPressed: boolean
   /** 是否持續按住放屁 */
   fartHeld: boolean
+  /** 被人抱起來摸時為 true：貓咪不能動且放屁被打斷 */
+  locked?: boolean
 }
 
 export interface CatState {
@@ -73,7 +75,30 @@ export class CatController {
     }
   }
 
+  /** 強制設定貓咪位置（例如被抱在腿上或摸完放回地面） */
+  teleportTo(x: number, y: number, z: number, syncGrid = true): void {
+    this.pos.x = x
+    this.pos.y = y
+    this.pos.z = z
+    this.vel.x = 0
+    this.vel.y = 0
+    this.vel.z = 0
+    this.grounded = y <= 0.01
+    this.isFarting = false
+    if (syncGrid) {
+      this.syncLogicalCell()
+    }
+  }
+
   step(input: CatInput, rawDt: number): CatState {
+    if (input.locked) {
+      this.vel.x = 0
+      this.vel.y = 0
+      this.vel.z = 0
+      this.isFarting = false
+      return this.getState()
+    }
+
     const dt = Math.min(Math.max(rawDt, 0), 0.05)
 
     // 水平輸入正規化

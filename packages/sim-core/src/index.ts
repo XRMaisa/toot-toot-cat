@@ -51,3 +51,17 @@ export {
   type StinkEmitParams,
   type StinkSnapshot,
 } from './stinkSystem'
+
+export {
+  findFloorPath,
+  isFloorWalkableForHuman,
+  type GridXZ,
+} from './pathfinding'
+
+export {
+  HUMAN_ACTIVITY_LABELS,
+  HumanController,
+  type HumanActivity,
+  type HumanPosture,
+  type HumanState,
+} from './humanController'
