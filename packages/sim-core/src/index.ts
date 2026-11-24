@@ -32,6 +32,8 @@ export {
 export {
   LEVEL_01,
   loadLevel,
+  parseLevelJson,
+  serializeLevelJson,
   type LevelData,
   type LevelFurniturePlacement,
   type LoadedLevel,
