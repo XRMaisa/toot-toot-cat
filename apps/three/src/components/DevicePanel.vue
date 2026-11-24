@@ -12,7 +12,7 @@ const emit = defineEmits<{
 
 <template>
   <div
-    class="absolute right-4 top-24 z-10 w-52 space-y-1.5 rounded-xl border border-slate-700/80 bg-slate-950/78 p-3 text-xs text-slate-200 backdrop-blur"
+    class="absolute right-4 top-24 z-10 w-48 space-y-1.5 rounded-xl border border-slate-700/80 bg-slate-950/88 p-2.5 text-xs text-slate-200 md:w-52 md:p-3 md:backdrop-blur"
     @pointerdown.stop
   >
     <p class="text-[11px] font-bold tracking-wide text-slate-300">⚡ 房間 IoT 設備控制</p>

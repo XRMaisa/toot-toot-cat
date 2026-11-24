@@ -1,6 +1,5 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { VRButton } from 'three/examples/jsm/webxr/VRButton.js'
 import {
   ENTITY_SPECS,
   GRID,
@@ -75,7 +74,6 @@ export class ThreeStage {
   private readonly scene = new THREE.Scene()
   private readonly camera: THREE.PerspectiveCamera
   private readonly controls: OrbitControls
-  private readonly vrButton: HTMLElement
   private readonly resizeObserver: ResizeObserver
 
   private readonly world = new SimulationWorld(LEVEL_01)
@@ -120,16 +118,12 @@ export class ThreeStage {
       antialias: !this.isMobile,
       powerPreference: 'default',
     })
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.isMobile ? 1.5 : 2))
+    // 手機端鎖定 pixelRatio = 1 並關閉即時陰影，大幅降低 GPU 顯存與過熱回收風險
+    this.renderer.setPixelRatio(this.isMobile ? 1 : Math.min(window.devicePixelRatio || 1, 2))
     this.renderer.setSize(w, h)
-    this.renderer.shadowMap.enabled = true
-    // PCFShadowMap 在行動裝置 GPU 上比 PCFSoftShadowMap 穩定且不易黑屏
+    this.renderer.shadowMap.enabled = !this.isMobile
     this.renderer.shadowMap.type = THREE.PCFShadowMap
-    this.renderer.xr.enabled = true
     container.appendChild(this.renderer.domElement)
-
-    this.vrButton = VRButton.createButton(this.renderer)
-    container.appendChild(this.vrButton)
 
     // near 設為 0.5 可大幅提升 Z-buffer 深度精度，消除遠近面閃爍（Z-fighting）
     this.camera = new THREE.PerspectiveCamera(50, Math.max(1, w) / Math.max(1, h), 0.5, 120)
@@ -590,6 +584,5 @@ export class ThreeStage {
     this.controls.dispose()
     this.renderer.dispose()
     this.renderer.domElement.remove()
-    this.vrButton.remove()
   }
 }

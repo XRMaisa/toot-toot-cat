@@ -179,9 +179,9 @@ onBeforeUnmount(() => stage?.dispose())
     <template v-if="!editorMode">
       <GameHud :game="gameState" />
 
-      <!-- 左上角：人類懷疑值、AI 狀態與效能除錯資訊 -->
+      <!-- 左上角：人類懷疑值、AI 狀態與效能除錯資訊（手機小螢幕隱藏避免遮擋與多層合成） -->
       <div
-        class="pointer-events-none absolute left-4 top-4 w-72 space-y-2 rounded-xl bg-slate-950/75 px-4 py-3 text-xs text-slate-200 backdrop-blur">
+        class="pointer-events-none absolute left-4 top-4 hidden w-72 space-y-2 rounded-xl bg-slate-950/85 px-4 py-3 text-xs text-slate-200 md:block md:backdrop-blur">
         <div>
           <p class="text-sm font-bold text-white">🐱💨 Toot Toot Cat</p>
           <p class="text-slate-400">
@@ -321,18 +321,14 @@ onBeforeUnmount(() => stage?.dispose())
     <ResultModal v-if="!editorMode" :game="gameState" @restart="restartGame" />
 
     <!-- 手機 WebGL 上下文遺失提示 -->
-    <div
-      v-if="webglLost"
-      class="absolute inset-0 z-40 flex items-center justify-center bg-slate-950/85 p-6 text-center text-sm text-white backdrop-blur"
-    >
+    <div v-if="webglLost"
+      class="absolute inset-0 z-50 flex items-center justify-center bg-slate-950/90 p-6 text-center text-sm text-white">
       <div class="max-w-xs space-y-3 rounded-2xl border border-amber-400/50 bg-slate-900 p-5">
         <p class="font-bold text-amber-300">⚠️ 3D 畫面暫時中斷（WebGL Context Lost）</p>
         <p class="text-xs text-slate-300">裝置 GPU 暫時回收了 3D 畫布，請重新整理頁面恢復。</p>
-        <button
-          type="button"
-          class="w-full cursor-pointer rounded-lg bg-amber-500 py-2 text-xs font-bold text-slate-950"
-          @click="reloadPage"
-        >
+        <button type="button"
+          class="w-full cursor-pointer rounded-lg bg-amber-500 py-2.5 text-xs font-bold text-slate-950 active:bg-amber-400"
+          @click="reloadPage" @touchend.prevent="reloadPage">
           重新載入
         </button>
       </div>

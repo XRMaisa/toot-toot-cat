@@ -56,7 +56,7 @@ function onJumpDown(): void {
 }
 
 function onFartDown(e: PointerEvent): void {
-  ;(e.currentTarget as HTMLElement | null)?.setPointerCapture(e.pointerId)
+  ; (e.currentTarget as HTMLElement | null)?.setPointerCapture(e.pointerId)
   fartActive.value = true
   emit('fart', true)
 }
@@ -70,44 +70,30 @@ function onFartUp(): void {
 
 <template>
   <!-- 左下角：虛擬搖桿 -->
-  <div
-    ref="padEl"
-    class="absolute bottom-6 left-6 flex h-32 w-32 touch-none items-center justify-center rounded-full border-2 border-white/25 bg-slate-950/45 backdrop-blur-sm"
-    @pointerdown.stop="onStickDown"
-    @pointermove.stop="onStickMove"
-    @pointerup.stop="onStickEnd"
-    @pointercancel.stop="onStickEnd"
-  >
-    <div
-      class="pointer-events-none h-12 w-12 rounded-full border border-white/50 bg-white/30 shadow-lg"
-      :style="{ transform: `translate(${knobX}px, ${knobY}px)` }"
-    />
+  <div ref="padEl"
+    class="absolute bottom-6 left-6 flex h-32 w-32 touch-none items-center justify-center rounded-full border-2 border-white/25 bg-slate-950/65"
+    @pointerdown.stop="onStickDown" @pointermove.stop="onStickMove" @pointerup.stop="onStickEnd"
+    @pointercancel.stop="onStickEnd">
+    <div class="pointer-events-none h-12 w-12 rounded-full border border-white/50 bg-white/30 shadow-lg"
+      :style="{ transform: `translate(${knobX}px, ${knobY}px)` }" />
   </div>
 
   <!-- 右下角：跳躍 & 放屁按鈕 -->
   <div class="absolute bottom-6 right-6 flex items-end gap-4">
-    <button
-      type="button"
-      class="flex h-18 w-18 cursor-pointer touch-none flex-col items-center justify-center rounded-full border-2 border-sky-300/60 bg-sky-500/40 text-xs font-bold text-white backdrop-blur-sm active:scale-95 active:bg-sky-400/70"
-      @pointerdown.stop="onJumpDown"
-    >
+    <button type="button"
+      class="flex h-18 w-18 cursor-pointer touch-none flex-col items-center justify-center rounded-full border-2 border-sky-300/60 bg-sky-600/65 text-xs font-bold text-white active:scale-95 active:bg-sky-400/80"
+      @pointerdown.stop="onJumpDown">
       <span class="text-lg leading-none">⬆️</span>
       <span>跳躍</span>
     </button>
 
-    <button
-      type="button"
-      class="flex h-20 w-20 cursor-pointer touch-none flex-col items-center justify-center rounded-full border-2 text-xs font-bold text-white backdrop-blur-sm transition active:scale-95"
-      :class="
-        fartActive
-          ? 'border-lime-300 bg-lime-500/75 shadow-[0_0_20px_rgba(132,204,22,0.7)]'
-          : 'border-lime-300/60 bg-lime-600/40'
-      "
-      @pointerdown.stop="onFartDown"
-      @pointerup.stop="onFartUp"
-      @pointercancel.stop="onFartUp"
-      @lostpointercapture="onFartUp"
-    >
+    <button type="button"
+      class="flex h-20 w-20 cursor-pointer touch-none flex-col items-center justify-center rounded-full border-2 text-xs font-bold text-white transition active:scale-95"
+      :class="fartActive
+          ? 'border-lime-300 bg-lime-500/85'
+          : 'border-lime-300/60 bg-lime-600/65'
+        " @pointerdown.stop="onFartDown" @pointerup.stop="onFartUp" @pointercancel.stop="onFartUp"
+      @lostpointercapture="onFartUp">
       <span class="text-xl leading-none">💨</span>
       <span>放屁</span>
     </button>

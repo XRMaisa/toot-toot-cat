@@ -13,6 +13,8 @@ export class StinkVisuals {
   readonly group = new THREE.Group()
   private readonly particleMesh: THREE.InstancedMesh
   private readonly heatmapMesh: THREE.InstancedMesh
+  private lastParticleCount = -1
+  private lastHeatmapCount = -1
 
   constructor() {
     // 1. 柔和黃綠色臭氣雲粒子
@@ -71,7 +73,10 @@ export class StinkVisuals {
       pCount++
     }
     this.particleMesh.count = pCount
-    this.particleMesh.instanceMatrix.needsUpdate = true
+    if (pCount > 0 || this.lastParticleCount !== 0) {
+      this.particleMesh.instanceMatrix.needsUpdate = true
+      this.lastParticleCount = pCount
+    }
 
     // 僅在熱力圖開啟時更新格子 InstancedMesh
     if (!this.heatmapMesh.visible) return
@@ -99,9 +104,12 @@ export class StinkVisuals {
       }
     }
     this.heatmapMesh.count = cCount
-    this.heatmapMesh.instanceMatrix.needsUpdate = true
-    if (this.heatmapMesh.instanceColor) {
-      this.heatmapMesh.instanceColor.needsUpdate = true
+    if (cCount > 0 || this.lastHeatmapCount !== 0) {
+      this.heatmapMesh.instanceMatrix.needsUpdate = true
+      if (this.heatmapMesh.instanceColor) {
+        this.heatmapMesh.instanceColor.needsUpdate = true
+      }
+      this.lastHeatmapCount = cCount
     }
   }
 
