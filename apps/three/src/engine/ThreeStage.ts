@@ -7,14 +7,23 @@ import {
   GRID,
   LEVEL_01,
   ROOM_SIZE,
+  StinkSystem,
   isInBounds,
   loadLevel,
   type CatState,
   type EntityKind,
   type LoadedLevel,
+  type StinkSnapshot,
 } from '@toot/sim-core'
-import { createCatMesh, createGrayboxMesh, type CatMeshRig } from './grayboxMeshes'
+import {
+  createCatMesh,
+  createGrayboxMesh,
+  createHumanMesh,
+  type CatMeshRig,
+  type HumanMeshRig,
+} from './grayboxMeshes'
 import { InputManager } from './inputState'
+import { StinkVisuals } from './stinkVisuals'
 
 export interface HoverCellInfo {
   readonly x: number
@@ -36,12 +45,13 @@ export interface ThreeStageCallbacks {
   onHoverCell?: (info: HoverCellInfo | null) => void
   onStats?: (stats: StageStats) => void
   onCatState?: (state: CatState) => void
+  onStinkState?: (snapshot: StinkSnapshot) => void
 }
 
 const WORLD_UP = new THREE.Vector3(0, 1, 0)
 
 /**
- * Three.js 場景外殼：renderer / camera / 16×10×16 房間 / 格線 / 灰盒物件 / 貓咪控制 / WebXR。
+ * Three.js 場景外殼：renderer / camera / 16×10×16 房間 / 灰盒物件 / 貓咪控制 / 臭氣粒子與熱力圖 / WebXR。
  * 主迴圈與模擬資料不放進 Vue 響應式，只透過 callback 節流同步 HUD。
  */
 export class ThreeStage {
@@ -55,6 +65,9 @@ export class ThreeStage {
   private readonly level: LoadedLevel
   private readonly catController: CatController
   private readonly catRig: CatMeshRig
+  private readonly humanRig: HumanMeshRig
+  private readonly stinkSystem = new StinkSystem()
+  private readonly stinkVisuals = new StinkVisuals()
   private readonly input: InputManager
 
   private readonly entityGroup = new THREE.Group()
@@ -70,7 +83,7 @@ export class ThreeStage {
 
   private lastHoverKey = ''
   private lastStatsTime = 0
-  private lastCatHudTime = 0
+  private lastHudTime = 0
   private lastFrameTime = performance.now()
   private prevCatPos = new THREE.Vector3()
 
@@ -104,7 +117,11 @@ export class ThreeStage {
     )
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement)
-    this.controls.target.set(initialCat.position.x, initialCat.position.y + 0.8, initialCat.position.z)
+    this.controls.target.set(
+      initialCat.position.x,
+      initialCat.position.y + 0.8,
+      initialCat.position.z,
+    )
     this.controls.enableDamping = true
     this.controls.minDistance = 4
     this.controls.maxDistance = 32
@@ -127,8 +144,11 @@ export class ThreeStage {
     this.scene.add(this.hoverTile)
 
     this.catRig = createCatMesh(this.level.cat)
+    this.humanRig = createHumanMesh(this.level.human)
     this.scene.add(this.entityGroup)
     this.syncEntitiesFromGrid()
+
+    this.scene.add(this.stinkVisuals.group)
 
     this.renderer.domElement.addEventListener('pointermove', this.onPointerMove)
     this.renderer.domElement.addEventListener('pointerleave', this.onPointerLeave)
@@ -137,11 +157,22 @@ export class ThreeStage {
     this.resizeObserver.observe(container)
 
     this.callbacks.onCatState?.(initialCat)
+    this.callbacks.onStinkState?.(this.stinkSystem.getSnapshot())
     this.renderer.setAnimationLoop(() => this.tick())
   }
 
   setGridVisible(visible: boolean): void {
     this.gridHelperGroup.visible = visible
+  }
+
+  setHeatmapVisible(visible: boolean): void {
+    this.stinkVisuals.setHeatmapVisible(visible)
+  }
+
+  resetStink(): void {
+    this.stinkSystem.reset()
+    this.humanRig.setAlert('calm')
+    this.callbacks.onStinkState?.(this.stinkSystem.getSnapshot())
   }
 
   setVirtualMove(right: number, forward: number): void {
@@ -188,7 +219,6 @@ export class ThreeStage {
     floor.receiveShadow = true
     this.scene.add(floor)
 
-    // BackSide 盒體：從房間外觀察時會自動隱藏前牆，不擋視線
     const walls = new THREE.Mesh(
       new THREE.BoxGeometry(width, height, depth),
       new THREE.MeshStandardMaterial({
@@ -244,6 +274,8 @@ export class ThreeStage {
     for (const entity of this.level.grid.getAllEntities()) {
       if (entity.id === this.level.cat.id) {
         this.entityGroup.add(this.catRig.group)
+      } else if (entity.id === this.level.human.id) {
+        this.entityGroup.add(this.humanRig.group)
       } else {
         this.entityGroup.add(createGrayboxMesh(entity))
       }
@@ -308,7 +340,7 @@ export class ThreeStage {
     const dt = (now - this.lastFrameTime) / 1000
     this.lastFrameTime = now
 
-    // 計算鏡頭投影到地面的「前方」與「右方」向量
+    // 1. 計算鏡頭投影到地面的「前方」與「右方」向量
     this.camera.getWorldDirection(this.camForward)
     this.camForward.y = 0
     if (this.camForward.lengthSq() < 1e-6) {
@@ -318,6 +350,7 @@ export class ThreeStage {
     }
     this.camRight.crossVectors(this.camForward, WORLD_UP).normalize()
 
+    // 2. 更新貓咪移動與碰撞
     const raw = this.input.consumeSnapshot()
     const moveX = this.camForward.x * raw.forward + this.camRight.x * raw.right
     const moveZ = this.camForward.z * raw.forward + this.camRight.z * raw.right
@@ -332,12 +365,36 @@ export class ThreeStage {
       dt,
     )
 
-    // 同步貓咪外觀與鏡頭跟隨
     const { x, y, z } = catState.position
     this.catRig.group.position.set(x, y, z)
     this.catRig.group.rotation.y = catState.facingYaw
     this.catRig.setFarting(catState.isFarting)
 
+    // 3. 更新臭氣粒子模擬與人類頭部吸入
+    const backX = -Math.sin(catState.facingYaw)
+    const backZ = -Math.cos(catState.facingYaw)
+    const humanHeadCell = {
+      x: this.level.human.origin.x,
+      y: this.level.human.origin.y + 2,
+      z: this.level.human.origin.z,
+    }
+    const stinkSnapshot = this.stinkSystem.step(
+      this.level.grid,
+      {
+        active: catState.isFarting,
+        x: x + backX * 0.44,
+        y: y + 0.36,
+        z: z + backZ * 0.44,
+        dirX: backX,
+        dirZ: backZ,
+      },
+      humanHeadCell,
+      dt,
+    )
+    this.stinkVisuals.update(this.stinkSystem)
+    this.humanRig.setAlert(stinkSnapshot.alertLevel)
+
+    // 4. 鏡頭跟隨貓咪
     const dx = x - this.prevCatPos.x
     const dy = y - this.prevCatPos.y
     const dz = z - this.prevCatPos.z
@@ -352,9 +409,11 @@ export class ThreeStage {
     this.controls.update()
     this.renderer.render(this.scene, this.camera)
 
-    if (now - this.lastCatHudTime >= 100) {
-      this.lastCatHudTime = now
+    // 5. 節流同步 HUD
+    if (now - this.lastHudTime >= 100) {
+      this.lastHudTime = now
       this.callbacks.onCatState?.(catState)
+      this.callbacks.onStinkState?.(stinkSnapshot)
     }
 
     if (now - this.lastStatsTime >= 250) {
@@ -370,6 +429,8 @@ export class ThreeStage {
   dispose(): void {
     this.renderer.setAnimationLoop(null)
     this.input.dispose()
+    this.stinkVisuals.dispose()
+    this.humanRig.dispose()
     this.renderer.domElement.removeEventListener('pointermove', this.onPointerMove)
     this.renderer.domElement.removeEventListener('pointerleave', this.onPointerLeave)
     this.resizeObserver.disconnect()

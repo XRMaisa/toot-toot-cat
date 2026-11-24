@@ -43,3 +43,11 @@ export {
   type CatState,
   type Vec3,
 } from './catController'
+
+export {
+  MAX_STINK_PARTICLES,
+  StinkSystem,
+  type HumanAlertLevel,
+  type StinkEmitParams,
+  type StinkSnapshot,
+} from './stinkSystem'

@@ -1,0 +1,271 @@
+import {
+  CELL_COUNT,
+  GRID,
+  SUSPICION_THRESHOLD,
+  cellIndex,
+  isInBounds,
+  type GridCoord,
+} from './constants'
+import type { OccupancyGrid } from './occupancy'
+
+export type HumanAlertLevel = 'calm' | 'suspicious' | 'caught'
+
+export interface StinkEmitParams {
+  /** 是否正在放屁 */
+  readonly active: boolean
+  /** 噴出位置（貓咪屁股世界座標） */
+  readonly x: number
+  readonly y: number
+  readonly z: number
+  /** 噴出方向（單位向量，通常為貓咪背後） */
+  readonly dirX: number
+  readonly dirZ: number
+}
+
+export interface StinkSnapshot {
+  readonly activeParticles: number
+  readonly suspicion: number
+  readonly alertLevel: HumanAlertLevel
+  readonly totalInhaled: number
+  readonly maxCellCount: number
+}
+
+export const MAX_STINK_PARTICLES = 3000
+
+const EMIT_RATE = 55 // 每秒產生粒子數
+const PARTICLE_MIN_LIFE = 7.5
+const PARTICLE_MAX_LIFE = 11.0
+const DIFFUSION_STRENGTH = 2.6 // 隨機擴散加速度
+const DRAG = 1.6 // 空氣阻力
+const BASE_BUOYANCY = 0.22 // 輕微自然上升
+const BOUNCE_DAMPING = 0.45
+
+const SUSPICION_PER_PARTICLE = 3.2
+const SUSPICION_DECAY_PER_SEC = 5.5
+
+/**
+ * 粒子＋格子混合式臭氣模擬（純 TypeScript，TypedArray 零 GC）。
+ * 1. 粒子負責擴散、碰家具/牆壁反彈與壽命衰減
+ * 2. 每步統計各格子粒子數（cellCounts），直接供給工程師模式 3D 熱力圖
+ * 3. 人類頭部所在格子會吸入粒子（粒子消失）並累積懷疑值
+ */
+export class StinkSystem {
+  readonly capacity = MAX_STINK_PARTICLES
+
+  // Struct-of-Arrays（給渲染引擎直接讀取，無需分配物件）
+  readonly posX = new Float32Array(MAX_STINK_PARTICLES)
+  readonly posY = new Float32Array(MAX_STINK_PARTICLES)
+  readonly posZ = new Float32Array(MAX_STINK_PARTICLES)
+  readonly velX = new Float32Array(MAX_STINK_PARTICLES)
+  readonly velY = new Float32Array(MAX_STINK_PARTICLES)
+  readonly velZ = new Float32Array(MAX_STINK_PARTICLES)
+  readonly age = new Float32Array(MAX_STINK_PARTICLES)
+  readonly maxAge = new Float32Array(MAX_STINK_PARTICLES)
+  readonly alive = new Uint8Array(MAX_STINK_PARTICLES)
+
+  /** 每格目前包含的粒子數量（長度 = 16×10×16 = 2560） */
+  readonly cellCounts = new Uint16Array(CELL_COUNT)
+
+  private activeCount = 0
+  private emitCarry = 0
+  private suspicion = 0
+  private totalInhaled = 0
+  private maxCellCount = 0
+  private nextSearchSlot = 0
+
+  reset(): void {
+    this.alive.fill(0)
+    this.cellCounts.fill(0)
+    this.activeCount = 0
+    this.emitCarry = 0
+    this.suspicion = 0
+    this.totalInhaled = 0
+    this.maxCellCount = 0
+    this.nextSearchSlot = 0
+  }
+
+  getSnapshot(): StinkSnapshot {
+    return {
+      activeParticles: this.activeCount,
+      suspicion: this.suspicion,
+      alertLevel: this.getAlertLevel(),
+      totalInhaled: this.totalInhaled,
+      maxCellCount: this.maxCellCount,
+    }
+  }
+
+  getAlertLevel(): HumanAlertLevel {
+    if (this.suspicion >= SUSPICION_THRESHOLD.caught) return 'caught'
+    if (this.suspicion >= SUSPICION_THRESHOLD.suspicious) return 'suspicious'
+    return 'calm'
+  }
+
+  step(
+    grid: OccupancyGrid,
+    emit: StinkEmitParams,
+    humanHeadCell: Readonly<GridCoord>,
+    rawDt: number,
+  ): StinkSnapshot {
+    const dt = Math.min(Math.max(rawDt, 0), 0.05)
+
+    // 1. 產生新粒子
+    if (emit.active) {
+      this.emitCarry += EMIT_RATE * dt
+      const toSpawn = Math.floor(this.emitCarry)
+      this.emitCarry -= toSpawn
+      for (let i = 0; i < toSpawn; i++) {
+        this.spawnParticle(grid, emit)
+      }
+    } else {
+      this.emitCarry = 0
+    }
+
+    // 2. 更新粒子位置、反彈、人類頭部吸入，並統計進格子
+    this.cellCounts.fill(0)
+    let aliveNow = 0
+    let inhaledNow = 0
+    let peakCell = 0
+
+    const dragFactor = Math.max(0, 1 - DRAG * dt)
+    const headX = humanHeadCell.x
+    const headY = humanHeadCell.y
+    const headZ = humanHeadCell.z
+
+    for (let i = 0; i < this.capacity; i++) {
+      if (this.alive[i] === 0) continue
+
+      const nextAge = (this.age[i] ?? 0) + dt
+      if (nextAge >= (this.maxAge[i] ?? 1)) {
+        this.alive[i] = 0
+        continue
+      }
+      this.age[i] = nextAge
+
+      // 隨機擴散＋自然微浮力＋阻力
+      let vx = ((this.velX[i] ?? 0) + (Math.random() - 0.5) * 2 * DIFFUSION_STRENGTH * dt) * dragFactor
+      let vy =
+        ((this.velY[i] ?? 0) +
+          (BASE_BUOYANCY + (Math.random() - 0.5) * 1.4 * DIFFUSION_STRENGTH) * dt) *
+        dragFactor
+      let vz = ((this.velZ[i] ?? 0) + (Math.random() - 0.5) * 2 * DIFFUSION_STRENGTH * dt) * dragFactor
+
+      let px = this.posX[i] ?? 0
+      let py = this.posY[i] ?? 0
+      let pz = this.posZ[i] ?? 0
+
+      // 分軸移動＋碰撞家具或牆壁反彈
+      const nx = px + vx * dt
+      if (this.hitsObstacle(grid, nx, py, pz)) {
+        vx = -vx * BOUNCE_DAMPING
+      } else {
+        px = nx
+      }
+
+      const ny = py + vy * dt
+      if (this.hitsObstacle(grid, px, ny, pz)) {
+        vy = -vy * BOUNCE_DAMPING
+      } else {
+        py = ny
+      }
+
+      const nz = pz + vz * dt
+      if (this.hitsObstacle(grid, px, py, nz)) {
+        vz = -vz * BOUNCE_DAMPING
+      } else {
+        pz = nz
+      }
+
+      // 確保粒子在合法範圍內
+      px = Math.min(GRID.NX - 0.02, Math.max(0.02, px))
+      py = Math.min(GRID.NY - 0.02, Math.max(0.02, py))
+      pz = Math.min(GRID.NZ - 0.02, Math.max(0.02, pz))
+
+      const cx = Math.floor(px)
+      const cy = Math.floor(py)
+      const cz = Math.floor(pz)
+
+      // 人類頭部格子吸入粒子
+      if (cx === headX && cy === headY && cz === headZ) {
+        this.alive[i] = 0
+        inhaledNow++
+        continue
+      }
+
+      this.posX[i] = px
+      this.posY[i] = py
+      this.posZ[i] = pz
+      this.velX[i] = vx
+      this.velY[i] = vy
+      this.velZ[i] = vz
+
+      aliveNow++
+      if (isInBounds(cx, cy, cz)) {
+        const idx = cellIndex(cx, cy, cz)
+        const count = (this.cellCounts[idx] ?? 0) + 1
+        this.cellCounts[idx] = count
+        if (count > peakCell) peakCell = count
+      }
+    }
+
+    this.activeCount = aliveNow
+    this.maxCellCount = peakCell
+
+    // 3. 更新懷疑值（0 ~ 100）
+    if (inhaledNow > 0) {
+      this.totalInhaled += inhaledNow
+      this.suspicion = Math.min(100, this.suspicion + inhaledNow * SUSPICION_PER_PARTICLE)
+    } else if (this.suspicion > 0) {
+      this.suspicion = Math.max(0, this.suspicion - SUSPICION_DECAY_PER_SEC * dt)
+    }
+
+    return this.getSnapshot()
+  }
+
+  private hitsObstacle(grid: OccupancyGrid, wx: number, wy: number, wz: number): boolean {
+    const cx = Math.floor(wx)
+    const cy = Math.floor(wy)
+    const cz = Math.floor(wz)
+    return grid.isSolidForSmell(cx, cy, cz)
+  }
+
+  private spawnParticle(grid: OccupancyGrid, emit: StinkEmitParams): void {
+    const slot = this.findFreeSlot()
+    if (slot < 0) return
+
+    let sx = emit.x + (Math.random() - 0.5) * 0.18
+    let sy = emit.y + (Math.random() - 0.5) * 0.14
+    let sz = emit.z + (Math.random() - 0.5) * 0.18
+
+    // 如果屁股緊貼牆壁或家具，退回貓咪中心一點避免生在障礙物裡
+    if (this.hitsObstacle(grid, sx, sy, sz)) {
+      sx = emit.x - emit.dirX * 0.35
+      sz = emit.z - emit.dirZ * 0.35
+    }
+    sx = Math.min(GRID.NX - 0.05, Math.max(0.05, sx))
+    sy = Math.min(GRID.NY - 0.05, Math.max(0.05, sy))
+    sz = Math.min(GRID.NZ - 0.05, Math.max(0.05, sz))
+
+    const speed = 1.1 + Math.random() * 1.0
+    this.posX[slot] = sx
+    this.posY[slot] = sy
+    this.posZ[slot] = sz
+    this.velX[slot] = emit.dirX * speed + (Math.random() - 0.5) * 0.9
+    this.velY[slot] = 0.25 + Math.random() * 0.45
+    this.velZ[slot] = emit.dirZ * speed + (Math.random() - 0.5) * 0.9
+    this.age[slot] = 0
+    this.maxAge[slot] =
+      PARTICLE_MIN_LIFE + Math.random() * (PARTICLE_MAX_LIFE - PARTICLE_MIN_LIFE)
+    this.alive[slot] = 1
+  }
+
+  private findFreeSlot(): number {
+    for (let offset = 0; offset < this.capacity; offset++) {
+      const idx = (this.nextSearchSlot + offset) % this.capacity
+      if (this.alive[idx] === 0) {
+        this.nextSearchSlot = (idx + 1) % this.capacity
+        return idx
+      }
+    }
+    return -1
+  }
+}
