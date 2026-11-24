@@ -128,6 +128,25 @@ describe('StinkSystem + DeviceSystem + Seeded RNG', () => {
     }
     expect(snap.totalExhausted).toBeGreaterThan(0)
   })
+
+  it('bursts an initial cloud covering at least a 2x2 grid footprint on first fart', () => {
+    const loaded = loadLevel(LEVEL_01)
+    const stink = new StinkSystem(createRng(99))
+    const snap = stink.step(
+      loaded.grid,
+      { active: true, x: 8.5, y: 0.4, z: 8.5, dirX: 0, dirZ: -1 },
+      { x: 0, y: 9, z: 0 },
+      0.05,
+    )
+
+    expect(snap.activeParticles).toBeGreaterThanOrEqual(30)
+    const occupiedXZ = new Set<string>()
+    for (let i = 0; i < stink.capacity; i++) {
+      if (stink.alive[i] === 0) continue
+      occupiedXZ.add(`${Math.floor(stink.posX[i] ?? 0)},${Math.floor(stink.posZ[i] ?? 0)}`)
+    }
+    expect(occupiedXZ.size).toBeGreaterThanOrEqual(4)
+  })
 })
 
 describe('GameLoop', () => {

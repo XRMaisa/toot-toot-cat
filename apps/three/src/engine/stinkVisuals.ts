@@ -16,11 +16,11 @@ export class StinkVisuals {
 
   constructor() {
     // 1. 柔和黃綠色臭氣雲粒子
-    const particleGeo = new THREE.SphereGeometry(0.14, 8, 6)
+    const particleGeo = new THREE.SphereGeometry(0.18, 8, 6)
     const particleMat = new THREE.MeshBasicMaterial({
       color: 0xa3e635,
       transparent: true,
-      opacity: 0.48,
+      opacity: 0.5,
       depthWrite: false,
     })
     this.particleMesh = new THREE.InstancedMesh(particleGeo, particleMat, MAX_STINK_PARTICLES)
@@ -107,8 +107,8 @@ export class StinkVisuals {
 
   dispose(): void {
     this.particleMesh.geometry.dispose()
-    ;(this.particleMesh.material as THREE.Material).dispose()
+      ; (this.particleMesh.material as THREE.Material).dispose()
     this.heatmapMesh.geometry.dispose()
-    ;(this.heatmapMesh.material as THREE.Material).dispose()
+      ; (this.heatmapMesh.material as THREE.Material).dispose()
   }
 }

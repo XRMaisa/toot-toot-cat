@@ -35,11 +35,13 @@ export interface StinkSnapshot {
 
 export const MAX_STINK_PARTICLES = 3000
 
-const EMIT_RATE = 55 // 每秒產生粒子數
+const EMIT_RATE = 75 // 持續按住時每秒產生粒子數
+const INITIAL_BURST_COUNT = 32 // 一開始放屁瞬間爆出至少 2×2 範圍的初始濃雲
+const INITIAL_SPREAD_RADIUS = 1.0 // 2×2 格子半徑（直徑 = 2 格）
 const PARTICLE_MIN_LIFE = 7.5
 const PARTICLE_MAX_LIFE = 11.0
-const DIFFUSION_STRENGTH = 2.6 // 隨機擴散加速度
-const DRAG = 1.6 // 空氣阻力
+const DIFFUSION_STRENGTH = 2.8 // 隨機擴散加速度
+const DRAG = 1.5 // 空氣阻力
 const BASE_BUOYANCY = 0.22 // 輕微自然上升
 const BOUNCE_DAMPING = 0.45
 
@@ -71,6 +73,7 @@ export class StinkSystem {
 
   private activeCount = 0
   private emitCarry = 0
+  private wasEmitting = false
   private suspicion = 0
   private totalInhaled = 0
   private totalExhausted = 0
@@ -88,6 +91,7 @@ export class StinkSystem {
     this.cellCounts.fill(0)
     this.activeCount = 0
     this.emitCarry = 0
+    this.wasEmitting = false
     this.suspicion = 0
     this.totalInhaled = 0
     this.totalExhausted = 0
@@ -121,16 +125,23 @@ export class StinkSystem {
   ): StinkSnapshot {
     const dt = Math.min(Math.max(rawDt, 0), 0.05)
 
-    // 1. 產生新粒子
+    // 1. 產生新粒子（一開始放屁立刻爆出至少 2×2 範圍的濃雲，按住時持續維持 2×2 寬幅擴散）
     if (emit.active) {
+      if (!this.wasEmitting) {
+        for (let i = 0; i < INITIAL_BURST_COUNT; i++) {
+          this.spawnParticle(grid, emit, true)
+        }
+      }
       this.emitCarry += EMIT_RATE * dt
       const toSpawn = Math.floor(this.emitCarry)
       this.emitCarry -= toSpawn
       for (let i = 0; i < toSpawn; i++) {
-        this.spawnParticle(grid, emit)
+        this.spawnParticle(grid, emit, false)
       }
+      this.wasEmitting = true
     } else {
       this.emitCarry = 0
+      this.wasEmitting = false
     }
 
     // 2. 更新粒子位置、氣流／熱浮力、反彈、門窗排氣、人類頭部吸入，並統計進格子
@@ -276,30 +287,40 @@ export class StinkSystem {
     return grid.isSolidForSmell(cx, cy, cz)
   }
 
-  private spawnParticle(grid: OccupancyGrid, emit: StinkEmitParams): void {
+  private spawnParticle(grid: OccupancyGrid, emit: StinkEmitParams, isBurst: boolean): void {
     const slot = this.findFreeSlot()
     if (slot < 0) return
 
-    let sx = emit.x + (this.rng() - 0.5) * 0.18
-    let sy = emit.y + (this.rng() - 0.5) * 0.14
-    let sz = emit.z + (this.rng() - 0.5) * 0.18
+    // 在至少 2×2 格子（直徑 2 單位）的水平圓盤內均勻分布
+    const angle = this.rng() * Math.PI * 2
+    const maxR = isBurst ? INITIAL_SPREAD_RADIUS : INITIAL_SPREAD_RADIUS * 0.85
+    const r = Math.sqrt(this.rng()) * maxR
+    const offX = Math.cos(angle) * r
+    const offZ = Math.sin(angle) * r
+    const offY = this.rng() * (isBurst ? 0.95 : 0.65)
 
-    // 如果屁股緊貼牆壁或家具，退回貓咪中心一點避免生在障礙物裡
+    let sx = emit.x + offX
+    let sy = emit.y + offY
+    let sz = emit.z + offZ
+
+    // 如果隨機點落進牆壁或家具，退回貓咪屁股中心點避免生在障礙物裡
     if (this.hitsObstacle(grid, sx, sy, sz)) {
-      sx = emit.x - emit.dirX * 0.35
-      sz = emit.z - emit.dirZ * 0.35
+      sx = emit.x - emit.dirX * 0.25
+      sy = emit.y + 0.15
+      sz = emit.z - emit.dirZ * 0.25
     }
     sx = Math.min(GRID.NX - 0.05, Math.max(0.05, sx))
     sy = Math.min(GRID.NY - 0.05, Math.max(0.05, sy))
     sz = Math.min(GRID.NZ - 0.05, Math.max(0.05, sz))
 
-    const speed = 1.1 + this.rng() * 1.0
+    const baseSpeed = isBurst ? 1.5 + this.rng() * 1.1 : 1.2 + this.rng() * 0.9
+    const radialBoost = isBurst ? 1.1 : 0.7
     this.posX[slot] = sx
     this.posY[slot] = sy
     this.posZ[slot] = sz
-    this.velX[slot] = emit.dirX * speed + (this.rng() - 0.5) * 0.9
-    this.velY[slot] = 0.25 + this.rng() * 0.45
-    this.velZ[slot] = emit.dirZ * speed + (this.rng() - 0.5) * 0.9
+    this.velX[slot] = emit.dirX * baseSpeed + Math.cos(angle) * radialBoost
+    this.velY[slot] = 0.25 + this.rng() * 0.55
+    this.velZ[slot] = emit.dirZ * baseSpeed + Math.sin(angle) * radialBoost
     this.age[slot] = 0
     this.maxAge[slot] =
       PARTICLE_MIN_LIFE + this.rng() * (PARTICLE_MAX_LIFE - PARTICLE_MIN_LIFE)
