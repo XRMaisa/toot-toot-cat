@@ -15,13 +15,64 @@ const ENTITY_COLORS: Record<EntityKind, number> = {
   chair: 0x2dd4bf,
 }
 
+function createBlobShadowTexture(shape: 'circle' | 'box'): THREE.CanvasTexture {
+  const size = 128
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  const ctx = canvas.getContext('2d')
+  if (ctx) {
+    ctx.clearRect(0, 0, size, size)
+    if (shape === 'circle') {
+      const grad = ctx.createRadialGradient(64, 64, 10, 64, 64, 60)
+      grad.addColorStop(0, 'rgba(15, 23, 42, 0.42)')
+      grad.addColorStop(0.65, 'rgba(15, 23, 42, 0.22)')
+      grad.addColorStop(1, 'rgba(15, 23, 42, 0)')
+      ctx.fillStyle = grad
+      ctx.fillRect(0, 0, size, size)
+    } else {
+      ctx.filter = 'blur(10px)'
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.34)'
+      ctx.fillRect(18, 18, size - 36, size - 36)
+    }
+  }
+  const tex = new THREE.CanvasTexture(canvas)
+  tex.colorSpace = THREE.SRGBColorSpace
+  return tex
+}
+
 export const SHARED_EDGE_MATERIAL = new THREE.LineBasicMaterial({
   color: 0x1e293b,
   transparent: true,
   opacity: 0.45,
 })
 
-export const SHARED_GRAYBOX_MATERIALS: ReadonlySet<THREE.Material> = new Set([SHARED_EDGE_MATERIAL])
+export const SHARED_CIRCLE_SHADOW_MAT = new THREE.MeshBasicMaterial({
+  map: createBlobShadowTexture('circle'),
+  transparent: true,
+  depthWrite: false,
+})
+
+export const SHARED_BOX_SHADOW_MAT = new THREE.MeshBasicMaterial({
+  map: createBlobShadowTexture('box'),
+  transparent: true,
+  depthWrite: false,
+})
+
+export const SHARED_GRAYBOX_MATERIALS: ReadonlySet<THREE.Material> = new Set([
+  SHARED_EDGE_MATERIAL,
+  SHARED_CIRCLE_SHADOW_MAT,
+  SHARED_BOX_SHADOW_MAT,
+])
+
+function createShadowDecal(width: number, depth: number, shape: 'circle' | 'box'): THREE.Mesh {
+  const mesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(width, depth),
+    shape === 'circle' ? SHARED_CIRCLE_SHADOW_MAT : SHARED_BOX_SHADOW_MAT,
+  )
+  mesh.rotation.x = -Math.PI / 2
+  return mesh
+}
 
 function addBoxWithEdges(
   group: THREE.Group,
@@ -34,13 +85,16 @@ function addBoxWithEdges(
   const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.75 })
   const mesh = new THREE.Mesh(geo, mat)
   mesh.position.set(sx / 2, sy / 2, sz / 2)
-  mesh.castShadow = true
-  mesh.receiveShadow = true
   group.add(mesh)
 
   const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo), SHARED_EDGE_MATERIAL)
   edges.position.copy(mesh.position)
   group.add(edges)
+
+  // 固定接觸陰影貼片（預先算好、零即時陰影開銷）
+  const shadow = createShadowDecal(sx + 0.45, sz + 0.45, 'box')
+  shadow.position.set(sx / 2, 0.012, sz / 2)
+  group.add(shadow)
 }
 
 function createEmojiSpriteTexture(symbol: string, bgColor: string): THREE.CanvasTexture {
@@ -71,6 +125,8 @@ function createEmojiSpriteTexture(symbol: string, bgColor: string): THREE.Canvas
 export interface CatMeshRig {
   readonly group: THREE.Group
   setFarting(active: boolean): void
+  /** 更新貓咪腳下固定陰影的落點高度（讓跳躍時能清楚看出落點） */
+  setShadowSurfaceY(catY: number, surfaceY: number): void
 }
 
 export interface HumanMeshRig {
@@ -95,8 +151,6 @@ export function createCatMesh(entity: GridEntity): CatMeshRig {
 
   const body = new THREE.Mesh(new THREE.SphereGeometry(0.42, 24, 16), bodyMat)
   body.position.set(0, 0.42, 0)
-  body.castShadow = true
-  body.receiveShadow = true
   group.add(body)
 
   // 小耳朵讓玩家一眼看出貓咪面向（+Z 為前方）
@@ -105,15 +159,25 @@ export function createCatMesh(entity: GridEntity): CatMeshRig {
     const ear = new THREE.Mesh(earGeo, bodyMat)
     ear.position.set(side * 0.2, 0.82, 0.12)
     ear.rotation.z = -side * 0.2
-    ear.castShadow = true
     group.add(ear)
   }
+
+  // 跟隨貓咪的圓形固定陰影
+  const shadow = createShadowDecal(1.05, 1.05, 'circle')
+  shadow.position.set(0, 0.018, 0)
+  group.add(shadow)
 
   return {
     group,
     setFarting(active: boolean) {
       bodyMat.emissive.setHex(active ? 0x4d7c0f : 0x000000)
       body.scale.set(active ? 1.08 : 1, active ? 0.92 : 1, active ? 1.08 : 1)
+    },
+    setShadowSurfaceY(catY: number, surfaceY: number) {
+      const heightAbove = Math.max(0, catY - surfaceY)
+      shadow.position.y = surfaceY - catY + 0.018
+      const shrink = Math.max(0.45, 1 - heightAbove * 0.18)
+      shadow.scale.set(shrink, shrink, 1)
     },
   }
 }
@@ -132,15 +196,11 @@ export function createHumanMesh(entity: GridEntity): HumanMeshRig {
   const body = new THREE.Mesh(new THREE.SphereGeometry(0.45, 24, 16), bodyMat)
   body.scale.set(0.88, 2.22, 0.88)
   body.position.set(0, 1.0, 0)
-  body.castShadow = true
-  body.receiveShadow = true
   group.add(body)
 
   const headGroup = new THREE.Group()
   headGroup.position.set(0, 2.5, 0)
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.42, 24, 16), headMat)
-  head.castShadow = true
-  head.receiveShadow = true
   headGroup.add(head)
 
   // 兩顆小眼睛標示面向（+Z）
@@ -151,6 +211,11 @@ export function createHumanMesh(entity: GridEntity): HumanMeshRig {
     headGroup.add(eye)
   }
   group.add(headGroup)
+
+  // 跟隨人類的固定接觸陰影
+  const shadow = createShadowDecal(1.15, 1.15, 'circle')
+  shadow.position.set(0, 0.018, 0)
+  group.add(shadow)
 
   const texSuspicious = createEmojiSpriteTexture('?', '#f59e0b')
   const texCaught = createEmojiSpriteTexture('!', '#ef4444')
@@ -194,6 +259,8 @@ export function createHumanMesh(entity: GridEntity): HumanMeshRig {
         headGroup.position.set(0, 0.46, 0.05)
         headGroup.rotation.set(-Math.PI / 2, 0, 0)
         badge.position.set(0, 1.45, 0.05)
+        shadow.position.set(0, 0.018, 1.1)
+        shadow.scale.set(1.0, 2.3, 1)
       } else if (state.posture === 'sit') {
         const petBob = state.activity === 'petCat' ? Math.sin(timeSec * 18) * 0.05 : 0
         body.rotation.set(0, 0, 0)
@@ -202,6 +269,8 @@ export function createHumanMesh(entity: GridEntity): HumanMeshRig {
         headGroup.position.set(0, 1.48 + petBob, 0)
         headGroup.rotation.set(state.activity === 'petCat' ? 0.3 : 0, 0, 0)
         badge.position.set(0, 2.45, 0)
+        shadow.position.set(0, 0.018, 0)
+        shadow.scale.set(1.05, 1.05, 1)
       } else {
         const walkBob = state.isMoving ? Math.abs(Math.sin(timeSec * 9)) * 0.08 : 0
         body.rotation.set(0, 0, 0)
@@ -210,6 +279,8 @@ export function createHumanMesh(entity: GridEntity): HumanMeshRig {
         headGroup.position.set(0, 2.5 + walkBob, 0)
         headGroup.rotation.set(0, 0, 0)
         badge.position.set(0, 3.45 + walkBob, 0)
+        shadow.position.set(0, 0.018, 0)
+        shadow.scale.set(1.0, 1.0, 1)
       }
     },
     dispose() {

@@ -1,6 +1,11 @@
 import * as THREE from 'three'
 import { DEVICE_LAYOUT, type DeviceState } from '@toot/sim-core'
 import { disposeObject3D } from './dispose'
+import {
+  SHARED_BOX_SHADOW_MAT,
+  SHARED_CIRCLE_SHADOW_MAT,
+  SHARED_GRAYBOX_MATERIALS,
+} from './grayboxMeshes'
 
 /**
  * 房間 5 項可動 IoT 設備的 3D 模型（電風扇、冷氣、電腦主機、窗戶、門）。
@@ -33,12 +38,15 @@ export class DeviceVisuals {
     const metalMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.45 })
     const base = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.46, 0.1, 16), metalMat)
     base.position.y = 0.05
-    base.castShadow = true
     fanGroup.add(base)
+
+    const fanShadow = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 1.2), SHARED_CIRCLE_SHADOW_MAT)
+    fanShadow.rotation.x = -Math.PI / 2
+    fanShadow.position.y = 0.012
+    fanGroup.add(fanShadow)
 
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.07, 1.0, 10), metalMat)
     pole.position.y = 0.55
-    pole.castShadow = true
     fanGroup.add(pole)
 
     this.fanHead.position.y = DEVICE_LAYOUT.fan.y
@@ -105,9 +113,12 @@ export class DeviceVisuals {
       new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.6 }),
     )
     pcCase.position.y = 0.675
-    pcCase.castShadow = true
-    pcCase.receiveShadow = true
     pcGroup.add(pcCase)
+
+    const pcShadow = new THREE.Mesh(new THREE.PlaneGeometry(1.05, 1.25), SHARED_BOX_SHADOW_MAT)
+    pcShadow.rotation.x = -Math.PI / 2
+    pcShadow.position.y = 0.012
+    pcGroup.add(pcShadow)
 
     this.pcGlowMat = new THREE.MeshBasicMaterial({ color: 0x475569 })
     const pcStrip = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.95, 0.04), this.pcGlowMat)
@@ -217,6 +228,6 @@ export class DeviceVisuals {
   }
 
   dispose(): void {
-    disposeObject3D(this.group)
+    disposeObject3D(this.group, SHARED_GRAYBOX_MATERIALS)
   }
 }

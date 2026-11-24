@@ -118,11 +118,10 @@ export class ThreeStage {
       antialias: !this.isMobile,
       powerPreference: 'default',
     })
-    // 手機端鎖定 pixelRatio = 1 並關閉即時陰影，大幅降低 GPU 顯存與過熱回收風險
+    // 取消即時陰影（改用預烘烤固定接觸陰影貼片），全平台只需 1 Pass 渲染更流暢省電
     this.renderer.setPixelRatio(this.isMobile ? 1 : Math.min(window.devicePixelRatio || 1, 2))
     this.renderer.setSize(w, h)
-    this.renderer.shadowMap.enabled = !this.isMobile
-    this.renderer.shadowMap.type = THREE.PCFShadowMap
+    this.renderer.shadowMap.enabled = false
     container.appendChild(this.renderer.domElement)
 
     // near 設為 0.5 可大幅提升 Z-buffer 深度精度，消除遠近面閃爍（Z-fighting）
@@ -308,22 +307,11 @@ export class ThreeStage {
   }
 
   private buildLights(): void {
-    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x475569, 1.15))
+    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x475569, 1.25))
 
-    const sun = new THREE.DirectionalLight(0xffffff, 1.4)
+    const sun = new THREE.DirectionalLight(0xffffff, 1.15)
     sun.position.set(ROOM_SIZE.width * 0.75, ROOM_SIZE.height * 1.9, ROOM_SIZE.depth * 0.85)
     sun.target.position.set(ROOM_SIZE.width / 2, 0, ROOM_SIZE.depth / 2)
-    sun.castShadow = true
-    const shadowSize = this.isMobile ? 512 : 1024
-    sun.shadow.mapSize.set(shadowSize, shadowSize)
-    sun.shadow.camera.near = 1
-    sun.shadow.camera.far = 45
-    const extent = 12
-    sun.shadow.camera.left = -extent
-    sun.shadow.camera.right = extent
-    sun.shadow.camera.top = extent
-    sun.shadow.camera.bottom = -extent
-    sun.shadow.normalBias = 0.04
     this.scene.add(sun, sun.target)
   }
 
@@ -465,6 +453,18 @@ export class ThreeStage {
     }
   }
 
+  private findSurfaceYBelowCat(x: number, y: number, z: number): number {
+    const cx = Math.min(GRID.NX - 1, Math.max(0, Math.floor(x)))
+    const cz = Math.min(GRID.NZ - 1, Math.max(0, Math.floor(z)))
+    const startY = Math.min(GRID.NY - 1, Math.floor(y + 0.05))
+    const catId = this.world.catEntity.id
+    for (let cy = startY; cy >= 0; cy--) {
+      const id = this.world.grid.getCell(cx, cy, cz)
+      if (id > 0 && id !== catId) return cy + 1
+    }
+    return 0
+  }
+
   private readonly onContextLost = (e: Event): void => {
     e.preventDefault()
     this.contextLost = true
@@ -524,6 +524,7 @@ export class ThreeStage {
     this.catRig.group.position.set(x, y, z)
     this.catRig.group.rotation.y = frame.cat.facingYaw
     this.catRig.setFarting(frame.cat.isFarting)
+    this.catRig.setShadowSurfaceY(y, this.findSurfaceYBelowCat(x, y, z))
 
     this.humanRig?.updateState(frame.human, frame.timeSec)
     this.humanRig?.setAlert(frame.stink.alertLevel)
