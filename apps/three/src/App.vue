@@ -6,9 +6,12 @@ import {
   LEVEL_01,
   SUSPICION_THRESHOLD,
   type CatState,
+  type GameLoopSnapshot,
   type HumanState,
   type StinkSnapshot,
 } from '@toot/sim-core'
+import GameHud from './components/GameHud.vue'
+import ResultModal from './components/ResultModal.vue'
 import TouchControls from './components/TouchControls.vue'
 import { ThreeStage, type HoverCellInfo, type StageStats } from './engine/ThreeStage'
 
@@ -24,6 +27,21 @@ const stinkState = ref<StinkSnapshot>({
   totalInhaled: 0,
   maxCellCount: 0,
 })
+const gameState = ref<GameLoopSnapshot>({
+  phase: 'playing',
+  elapsedSec: 0,
+  fartQuota: LEVEL_01.fartQuota,
+  fartRemaining: LEVEL_01.fartQuota,
+  fartProgress: 0,
+  fartPresses: 0,
+  parTime: LEVEL_01.parTime,
+  parPresses: LEVEL_01.parPresses,
+  maxSuspicion: 0,
+  safeCountdownSec: 3,
+  score: 1000,
+  stars: 2,
+})
+
 const showGrid = ref(true)
 const showHeatmap = ref(false)
 const showTouchControls = ref(true)
@@ -70,8 +88,8 @@ function toggleHeatmap(): void {
   stage?.setHeatmapVisible(showHeatmap.value)
 }
 
-function resetStink(): void {
-  stage?.resetStink()
+function restartGame(): void {
+  stage?.restart()
 }
 
 onMounted(() => {
@@ -92,6 +110,9 @@ onMounted(() => {
     onStinkState: (st) => {
       stinkState.value = st
     },
+    onGameState: (g) => {
+      gameState.value = g
+    },
   })
 })
 
@@ -102,12 +123,15 @@ onBeforeUnmount(() => stage?.dispose())
   <div class="relative h-full w-full select-none overflow-hidden bg-slate-900">
     <div ref="container" class="absolute inset-0" />
 
-    <!-- 左上角：關卡、懷疑值、人類 AI、貓咪與效能除錯資訊 -->
+    <!-- 頂部中央：計時、屁額度、放屁次數與預估分數 -->
+    <GameHud :game="gameState" />
+
+    <!-- 左上角：人類懷疑值、AI 狀態與效能除錯資訊 -->
     <div
-      class="pointer-events-none absolute left-4 top-4 w-76 space-y-2 rounded-xl bg-slate-950/75 px-4 py-3 text-xs text-slate-200 backdrop-blur"
+      class="pointer-events-none absolute left-4 top-4 w-72 space-y-2 rounded-xl bg-slate-950/75 px-4 py-3 text-xs text-slate-200 backdrop-blur"
     >
       <div>
-        <p class="text-sm font-bold text-white">🐱💨 Toot Toot Cat · M4 人類 AI</p>
+        <p class="text-sm font-bold text-white">🐱💨 Toot Toot Cat</p>
         <p class="text-slate-400">
           {{ LEVEL_01.name }} · {{ GRID.NX }}×{{ GRID.NY }}×{{ GRID.NZ }} · Draw Calls
           {{ stats.drawCalls }}
@@ -164,7 +188,7 @@ onBeforeUnmount(() => stage?.dispose())
         </span>
         ·
         <span v-if="humanState?.activity === 'petCat'" class="font-bold text-pink-300">
-          被摸摸中（鎖定）
+          被摸摸中
         </span>
         <span v-else :class="catState.grounded ? 'text-emerald-300' : 'text-sky-300'">
           {{ catState.grounded ? '著地' : '跳躍中' }}
@@ -188,7 +212,7 @@ onBeforeUnmount(() => stage?.dispose())
       </div>
     </div>
 
-    <!-- 右上角：除錯開關與操作提示 -->
+    <!-- 右上角：除錯開關與重玩按鈕 -->
     <div class="absolute right-4 top-4 flex flex-col items-end gap-2 text-xs text-slate-200">
       <div class="flex flex-wrap justify-end gap-2">
         <button
@@ -219,10 +243,10 @@ onBeforeUnmount(() => stage?.dispose())
         </button>
         <button
           type="button"
-          class="cursor-pointer rounded-lg border border-rose-500/60 bg-rose-950/70 px-3 py-1.5 font-medium text-rose-100 backdrop-blur transition hover:bg-rose-900/80"
-          @click="resetStink"
+          class="cursor-pointer rounded-lg border border-sky-500/60 bg-sky-950/75 px-3 py-1.5 font-medium text-sky-100 backdrop-blur transition hover:bg-sky-900/80"
+          @click="restartGame"
         >
-          重置臭氣
+          重新開始
         </button>
       </div>
       <div class="pointer-events-none rounded-lg bg-slate-950/60 px-3 py-1.5 text-slate-300">
@@ -232,10 +256,13 @@ onBeforeUnmount(() => stage?.dispose())
 
     <!-- 手機／測試用虛擬搖桿與按鈕 -->
     <TouchControls
-      v-if="showTouchControls"
+      v-if="showTouchControls && gameState.phase !== 'won' && gameState.phase !== 'lost'"
       @move="(r, f) => stage?.setVirtualMove(r, f)"
       @jump="stage?.triggerJump()"
       @fart="(held) => stage?.setVirtualFart(held)"
     />
+
+    <!-- 過關 / 失敗結算彈窗 -->
+    <ResultModal :game="gameState" @restart="restartGame" />
   </div>
 </template>

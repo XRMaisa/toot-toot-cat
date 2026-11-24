@@ -65,3 +65,9 @@ export {
   type HumanPosture,
   type HumanState,
 } from './humanController'
+
+export {
+  GameLoop,
+  type GameLoopSnapshot,
+  type GamePhase,
+} from './gameLoop'
