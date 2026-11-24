@@ -68,6 +68,7 @@ const editorTool = ref<EditorTool>('bed')
 const showGrid = ref(true)
 const showHeatmap = ref(false)
 const showTouchControls = ref(true)
+const webglLost = ref(false)
 
 let stage: ThreeStage | undefined
 
@@ -130,6 +131,10 @@ function toggleDevice(id: DeviceId): void {
   stage?.toggleDevice(id)
 }
 
+function reloadPage(): void {
+  window.location.reload()
+}
+
 onMounted(() => {
   if (!container.value) return
   stage = new ThreeStage(container.value, {
@@ -156,6 +161,9 @@ onMounted(() => {
     },
     onDeviceState: (d) => {
       deviceState.value = d
+    },
+    onContextLost: (lost) => {
+      webglLost.value = lost
     },
   })
 })
@@ -311,5 +319,23 @@ onBeforeUnmount(() => stage?.dispose())
 
     <!-- 過關 / 失敗結算彈窗 -->
     <ResultModal v-if="!editorMode" :game="gameState" @restart="restartGame" />
+
+    <!-- 手機 WebGL 上下文遺失提示 -->
+    <div
+      v-if="webglLost"
+      class="absolute inset-0 z-40 flex items-center justify-center bg-slate-950/85 p-6 text-center text-sm text-white backdrop-blur"
+    >
+      <div class="max-w-xs space-y-3 rounded-2xl border border-amber-400/50 bg-slate-900 p-5">
+        <p class="font-bold text-amber-300">⚠️ 3D 畫面暫時中斷（WebGL Context Lost）</p>
+        <p class="text-xs text-slate-300">裝置 GPU 暫時回收了 3D 畫布，請重新整理頁面恢復。</p>
+        <button
+          type="button"
+          class="w-full cursor-pointer rounded-lg bg-amber-500 py-2 text-xs font-bold text-slate-950"
+          @click="reloadPage"
+        >
+          重新載入
+        </button>
+      </div>
+    </div>
   </div>
 </template>

@@ -61,6 +61,7 @@ export interface ThreeStageCallbacks {
   onGameState?: (snapshot: GameLoopSnapshot) => void
   onLevelChange?: (level: LevelData) => void
   onDeviceState?: (state: DeviceState) => void
+  onContextLost?: (lost: boolean) => void
 }
 
 const WORLD_UP = new THREE.Vector3(0, 1, 0)
@@ -104,25 +105,34 @@ export class ThreeStage {
   private lastHudTime = 0
   private lastFrameTime = performance.now()
   private lastPhase: GamePhase = 'playing'
+  private contextLost = false
+  private readonly isMobile: boolean
 
   constructor(
     private readonly container: HTMLElement,
     private readonly callbacks: ThreeStageCallbacks = {},
   ) {
     const { clientWidth: w, clientHeight: h } = container
+    this.isMobile =
+      window.matchMedia('(pointer: coarse)').matches || Math.min(w, h) < 768
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true })
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+    this.renderer = new THREE.WebGLRenderer({
+      antialias: !this.isMobile,
+      powerPreference: 'default',
+    })
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.isMobile ? 1.5 : 2))
     this.renderer.setSize(w, h)
     this.renderer.shadowMap.enabled = true
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap
+    // PCFShadowMap 在行動裝置 GPU 上比 PCFSoftShadowMap 穩定且不易黑屏
+    this.renderer.shadowMap.type = THREE.PCFShadowMap
     this.renderer.xr.enabled = true
     container.appendChild(this.renderer.domElement)
 
     this.vrButton = VRButton.createButton(this.renderer)
     container.appendChild(this.vrButton)
 
-    this.camera = new THREE.PerspectiveCamera(50, w / h, 0.1, 150)
+    // near 設為 0.5 可大幅提升 Z-buffer 深度精度，消除遠近面閃爍（Z-fighting）
+    this.camera = new THREE.PerspectiveCamera(50, Math.max(1, w) / Math.max(1, h), 0.5, 120)
     this.controls = new OrbitControls(this.camera, this.renderer.domElement)
     this.controls.enableDamping = true
     this.controls.minDistance = 4
@@ -157,6 +167,8 @@ export class ThreeStage {
     this.renderer.domElement.addEventListener('pointerleave', this.onPointerLeave)
     this.renderer.domElement.addEventListener('pointerdown', this.onCanvasPointerDown)
     this.renderer.domElement.addEventListener('pointerup', this.onCanvasPointerUp)
+    this.renderer.domElement.addEventListener('webglcontextlost', this.onContextLost)
+    this.renderer.domElement.addEventListener('webglcontextrestored', this.onContextRestored)
 
     this.resizeObserver = new ResizeObserver(() => this.onResize())
     this.resizeObserver.observe(container)
@@ -308,7 +320,8 @@ export class ThreeStage {
     sun.position.set(ROOM_SIZE.width * 0.75, ROOM_SIZE.height * 1.9, ROOM_SIZE.depth * 0.85)
     sun.target.position.set(ROOM_SIZE.width / 2, 0, ROOM_SIZE.depth / 2)
     sun.castShadow = true
-    sun.shadow.mapSize.set(1024, 1024)
+    const shadowSize = this.isMobile ? 512 : 1024
+    sun.shadow.mapSize.set(shadowSize, shadowSize)
     sun.shadow.camera.near = 1
     sun.shadow.camera.far = 45
     const extent = 12
@@ -316,7 +329,7 @@ export class ThreeStage {
     sun.shadow.camera.right = extent
     sun.shadow.camera.top = extent
     sun.shadow.camera.bottom = -extent
-    sun.shadow.bias = -0.0005
+    sun.shadow.normalBias = 0.04
     this.scene.add(sun, sun.target)
   }
 
@@ -332,14 +345,21 @@ export class ThreeStage {
     floor.receiveShadow = true
     this.roomGroup.add(floor)
 
-    const walls = new THREE.Mesh(
-      new THREE.BoxGeometry(width, height, depth),
-      new THREE.MeshStandardMaterial({
-        color: 0xfdf6e3,
-        roughness: 0.95,
-        side: THREE.BackSide,
-      }),
-    )
+    // 牆面與天花板：將底面（index 3 = -Y）設為不可見，徹底避免與 y=0 的地板重疊產生 Z-fighting 閃爍
+    const wallMat = new THREE.MeshStandardMaterial({
+      color: 0xfdf6e3,
+      roughness: 0.95,
+      side: THREE.BackSide,
+    })
+    const hiddenBottomMat = new THREE.MeshBasicMaterial({ visible: false })
+    const walls = new THREE.Mesh(new THREE.BoxGeometry(width, height, depth), [
+      wallMat,
+      wallMat,
+      wallMat,
+      hiddenBottomMat,
+      wallMat,
+      wallMat,
+    ])
     walls.position.set(width / 2, height / 2, depth / 2)
     walls.receiveShadow = true
     this.roomGroup.add(walls)
@@ -349,7 +369,7 @@ export class ThreeStage {
     const { width, height, depth } = ROOM_SIZE
 
     const floorGrid = new THREE.GridHelper(width, GRID.NX, 0x64748b, 0x94a3b8)
-    floorGrid.position.set(width / 2, 0.008, depth / 2)
+    floorGrid.position.set(width / 2, 0.02, depth / 2)
     this.gridHelperGroup.add(floorGrid)
 
     const roomWire = new THREE.LineSegments(
@@ -360,7 +380,7 @@ export class ThreeStage {
     this.gridHelperGroup.add(roomWire)
 
     const axes = new THREE.AxesHelper(2.2)
-    axes.position.set(0, 0.02, 0)
+    axes.position.set(0, 0.03, 0)
     this.gridHelperGroup.add(axes)
   }
 
@@ -375,7 +395,7 @@ export class ThreeStage {
       }),
     )
     tile.rotation.x = -Math.PI / 2
-    tile.position.y = 0.015
+    tile.position.y = 0.035
     tile.visible = false
     return tile
   }
@@ -422,7 +442,7 @@ export class ThreeStage {
       this.editorOverlay.updateGhost(this.world, cell.x, cell.z)
     } else {
       this.editorOverlay.hide()
-      this.hoverTile.position.set(cell.x + 0.5, 0.015, cell.z + 0.5)
+      this.hoverTile.position.set(cell.x + 0.5, 0.035, cell.z + 0.5)
       this.hoverTile.visible = true
     }
 
@@ -451,6 +471,18 @@ export class ThreeStage {
     }
   }
 
+  private readonly onContextLost = (e: Event): void => {
+    e.preventDefault()
+    this.contextLost = true
+    this.callbacks.onContextLost?.(true)
+  }
+
+  private readonly onContextRestored = (): void => {
+    this.contextLost = false
+    this.callbacks.onContextLost?.(false)
+    this.onResize()
+  }
+
   private onResize(): void {
     const { clientWidth: w, clientHeight: h } = this.container
     if (w === 0 || h === 0) return
@@ -460,6 +492,8 @@ export class ThreeStage {
   }
 
   private tick(): void {
+    if (this.contextLost) return
+
     const now = performance.now()
     const dt = (now - this.lastFrameTime) / 1000
     this.lastFrameTime = now
@@ -550,6 +584,8 @@ export class ThreeStage {
     this.renderer.domElement.removeEventListener('pointerleave', this.onPointerLeave)
     this.renderer.domElement.removeEventListener('pointerdown', this.onCanvasPointerDown)
     this.renderer.domElement.removeEventListener('pointerup', this.onCanvasPointerUp)
+    this.renderer.domElement.removeEventListener('webglcontextlost', this.onContextLost)
+    this.renderer.domElement.removeEventListener('webglcontextrestored', this.onContextRestored)
     this.resizeObserver.disconnect()
     this.controls.dispose()
     this.renderer.dispose()
