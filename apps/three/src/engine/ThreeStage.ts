@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { VRButton } from 'three/examples/jsm/webxr/VRButton.js'
 import {
   CatController,
+  DeviceSystem,
   ENTITY_SPECS,
   GRID,
   GameLoop,
@@ -14,6 +15,8 @@ import {
   isInBounds,
   loadLevel,
   type CatState,
+  type DeviceId,
+  type DeviceState,
   type EntityKind,
   type FurnitureKind,
   type GameLoopSnapshot,
@@ -23,6 +26,7 @@ import {
   type LoadedLevel,
   type StinkSnapshot,
 } from '@toot/sim-core'
+import { DeviceVisuals } from './deviceMeshes'
 import {
   createCatMesh,
   createGrayboxMesh,
@@ -59,6 +63,7 @@ export interface ThreeStageCallbacks {
   onStinkState?: (snapshot: StinkSnapshot) => void
   onGameState?: (snapshot: GameLoopSnapshot) => void
   onLevelChange?: (level: LevelData) => void
+  onDeviceState?: (state: DeviceState) => void
 }
 
 const WORLD_UP = new THREE.Vector3(0, 1, 0)
@@ -84,6 +89,8 @@ export class ThreeStage {
   private humanRig?: HumanMeshRig
   private readonly stinkSystem = new StinkSystem()
   private readonly stinkVisuals = new StinkVisuals()
+  private readonly deviceSystem = new DeviceSystem()
+  private readonly deviceVisuals = new DeviceVisuals()
   private readonly input: InputManager
 
   private readonly entityGroup = new THREE.Group()
@@ -160,6 +167,7 @@ export class ThreeStage {
     this.scene.add(this.ghostMesh)
 
     this.scene.add(this.entityGroup)
+    this.scene.add(this.deviceVisuals.group)
     this.scene.add(this.stinkVisuals.group)
 
     this.initLevel(LEVEL_01)
@@ -232,6 +240,11 @@ export class ThreeStage {
     this.stinkVisuals.setHeatmapVisible(visible)
   }
 
+  toggleDevice(id: DeviceId): void {
+    const next = this.deviceSystem.toggle(id)
+    this.callbacks.onDeviceState?.(next)
+  }
+
   setVirtualMove(right: number, forward: number): void {
     this.input.setVirtualMove(right, forward)
   }
@@ -258,6 +271,8 @@ export class ThreeStage {
     this.gameLoop = new GameLoop(data)
     this.stinkSystem.reset()
     this.stinkVisuals.update(this.stinkSystem)
+    this.deviceSystem.reset()
+    this.deviceVisuals.update(this.deviceSystem.getState(), 0)
 
     this.catRig = createCatMesh(this.level.cat)
     this.humanRig = createHumanMesh(this.level.human)
@@ -291,6 +306,7 @@ export class ThreeStage {
     this.callbacks.onStinkState?.(this.stinkSystem.getSnapshot())
     this.callbacks.onGameState?.(initialGame)
     this.callbacks.onLevelChange?.(this.currentLevelData)
+    this.callbacks.onDeviceState?.(this.deviceSystem.getState())
   }
 
   private buildLights(): void {
@@ -630,10 +646,12 @@ export class ThreeStage {
     this.catRig.group.rotation.y = catState.facingYaw
     this.catRig.setFarting(catState.isFarting)
 
-    // 4. 更新人類外觀姿勢
+    // 4. 更新人類外觀姿勢與房間 IoT 設備
     this.humanRig?.updateState(humanState, timeSec)
+    const deviceState = this.deviceSystem.step(dt)
+    this.deviceVisuals.update(deviceState, dt)
 
-    // 5. 更新臭氣粒子與頭部吸入
+    // 5. 更新臭氣粒子、氣流／熱浮力、門窗排氣與頭部吸入
     const backX = -Math.sin(catState.facingYaw)
     const backZ = -Math.cos(catState.facingYaw)
     const stinkSnapshot = this.stinkSystem.step(
@@ -648,6 +666,7 @@ export class ThreeStage {
       },
       humanState.headCell,
       dt,
+      this.deviceSystem,
     )
     this.stinkVisuals.update(this.stinkSystem)
     this.humanRig?.setAlert(stinkSnapshot.alertLevel)

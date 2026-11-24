@@ -73,3 +73,11 @@ export {
   type GameLoopSnapshot,
   type GamePhase,
 } from './gameLoop'
+
+export {
+  DEVICE_LAYOUT,
+  DeviceSystem,
+  type AirflowForce,
+  type DeviceId,
+  type DeviceState,
+} from './devices'

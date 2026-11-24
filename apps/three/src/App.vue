@@ -6,11 +6,14 @@ import {
   LEVEL_01,
   SUSPICION_THRESHOLD,
   type CatState,
+  type DeviceId,
+  type DeviceState,
   type GameLoopSnapshot,
   type HumanState,
   type LevelData,
   type StinkSnapshot,
 } from '@toot/sim-core'
+import DevicePanel from './components/DevicePanel.vue'
 import EditorPanel from './components/EditorPanel.vue'
 import GameHud from './components/GameHud.vue'
 import ResultModal from './components/ResultModal.vue'
@@ -33,7 +36,17 @@ const stinkState = ref<StinkSnapshot>({
   suspicion: 0,
   alertLevel: 'calm',
   totalInhaled: 0,
+  totalExhausted: 0,
   maxCellCount: 0,
+})
+const deviceState = ref<DeviceState>({
+  fanOn: false,
+  fanOscillate: true,
+  fanYaw: 0,
+  acOn: false,
+  pcHot: false,
+  windowOpen: false,
+  doorOpen: false,
 })
 const gameState = ref<GameLoopSnapshot>({
   phase: 'playing',
@@ -113,6 +126,10 @@ function restartGame(): void {
   stage?.restart()
 }
 
+function toggleDevice(id: DeviceId): void {
+  stage?.toggleDevice(id)
+}
+
 onMounted(() => {
   if (!container.value) return
   stage = new ThreeStage(container.value, {
@@ -137,6 +154,9 @@ onMounted(() => {
     onLevelChange: (lvl) => {
       currentLevel.value = lvl
     },
+    onDeviceState: (d) => {
+      deviceState.value = d
+    },
   })
 })
 
@@ -153,8 +173,7 @@ onBeforeUnmount(() => stage?.dispose())
 
       <!-- 左上角：人類懷疑值、AI 狀態與效能除錯資訊 -->
       <div
-        class="pointer-events-none absolute left-4 top-4 w-72 space-y-2 rounded-xl bg-slate-950/75 px-4 py-3 text-xs text-slate-200 backdrop-blur"
-      >
+        class="pointer-events-none absolute left-4 top-4 w-72 space-y-2 rounded-xl bg-slate-950/75 px-4 py-3 text-xs text-slate-200 backdrop-blur">
         <div>
           <p class="text-sm font-bold text-white">🐱💨 Toot Toot Cat</p>
           <p class="text-slate-400">
@@ -172,23 +191,15 @@ onBeforeUnmount(() => stage?.dispose())
             </span>
           </div>
           <div class="relative h-2.5 w-full overflow-hidden rounded-full bg-slate-800">
-            <div
-              class="h-full transition-all duration-100"
-              :class="suspicionBarColor"
-              :style="{ width: `${Math.min(100, stinkState.suspicion)}%` }"
-            />
-            <div
-              class="absolute inset-y-0 w-0.5 bg-amber-200/70"
-              :style="{ left: `${SUSPICION_THRESHOLD.suspicious}%` }"
-            />
-            <div
-              class="absolute inset-y-0 w-0.5 bg-rose-200/80"
-              :style="{ left: `${SUSPICION_THRESHOLD.caught}%` }"
-            />
+            <div class="h-full transition-all duration-100" :class="suspicionBarColor"
+              :style="{ width: `${Math.min(100, stinkState.suspicion)}%` }" />
+            <div class="absolute inset-y-0 w-0.5 bg-amber-200/70"
+              :style="{ left: `${SUSPICION_THRESHOLD.suspicious}%` }" />
+            <div class="absolute inset-y-0 w-0.5 bg-rose-200/80" :style="{ left: `${SUSPICION_THRESHOLD.caught}%` }" />
           </div>
           <p class="text-[11px] text-slate-400">
-            粒子 {{ stinkState.activeParticles }} · 頭部吸入 {{ stinkState.totalInhaled }} · 單格峰值
-            {{ stinkState.maxCellCount }}
+            粒子 {{ stinkState.activeParticles }} · 吸入 {{ stinkState.totalInhaled }} · 排出
+            <span class="text-emerald-300">{{ stinkState.totalExhausted }}</span>
           </p>
         </div>
 
@@ -227,7 +238,7 @@ onBeforeUnmount(() => stage?.dispose())
             地板
             <span class="font-mono text-sky-300">({{ hoverCell.x }}, {{ hoverCell.z }})</span>：
             <span v-if="hoverCell.occupants.length > 0" class="text-amber-300">
-              {{ hoverCell.occupants.map((o) => `${o.label}#${o.id}`).join('、') }}
+              {{hoverCell.occupants.map((o) => `${o.label}#${o.id}`).join('、')}}
             </span>
             <span v-else class="text-slate-400">空</span>
           </template>
@@ -239,64 +250,42 @@ onBeforeUnmount(() => stage?.dispose())
     </template>
 
     <!-- 編輯模式側欄 -->
-    <EditorPanel
-      v-else
-      :level="currentLevel"
-      :selected-tool="editorTool"
-      @select-tool="selectEditorTool"
-      @update-meta="(m) => stage?.updateLevelMeta(m)"
-      @import-level="(lvl) => stage?.importLevel(lvl)"
-      @play-level="toggleEditorMode"
-    />
+    <EditorPanel v-else :level="currentLevel" :selected-tool="editorTool" @select-tool="selectEditorTool"
+      @update-meta="(m) => stage?.updateLevelMeta(m)" @import-level="(lvl) => stage?.importLevel(lvl)"
+      @play-level="toggleEditorMode" />
 
     <!-- 右上角：模式切換、除錯開關與重玩 -->
     <div class="absolute right-4 top-4 flex flex-col items-end gap-2 text-xs text-slate-200">
       <div class="flex flex-wrap justify-end gap-2">
-        <button
-          type="button"
-          class="cursor-pointer rounded-lg border px-3 py-1.5 font-bold text-white backdrop-blur transition"
-          :class="
-            editorMode
-              ? 'border-emerald-400/80 bg-emerald-600/80 hover:bg-emerald-500'
-              : 'border-amber-400/80 bg-amber-600/75 hover:bg-amber-500'
-          "
-          @click="toggleEditorMode"
-        >
+        <button type="button"
+          class="cursor-pointer rounded-lg border px-3 py-1.5 font-bold text-white backdrop-blur transition" :class="editorMode
+            ? 'border-emerald-400/80 bg-emerald-600/80 hover:bg-emerald-500'
+            : 'border-amber-400/80 bg-amber-600/75 hover:bg-amber-500'
+            " @click="toggleEditorMode">
           {{ editorMode ? '▶ 返回試玩' : '🛠️ 關卡編輯器' }}
         </button>
 
         <template v-if="!editorMode">
-          <button
-            type="button"
-            class="cursor-pointer rounded-lg border px-3 py-1.5 font-medium text-white backdrop-blur transition"
-            :class="
-              showHeatmap
-                ? 'border-lime-400/80 bg-lime-600/70 hover:bg-lime-500/80'
-                : 'border-slate-600/80 bg-slate-950/75 hover:bg-slate-800'
-            "
-            @click="toggleHeatmap"
-          >
+          <button type="button"
+            class="cursor-pointer rounded-lg border px-3 py-1.5 font-medium text-white backdrop-blur transition" :class="showHeatmap
+              ? 'border-lime-400/80 bg-lime-600/70 hover:bg-lime-500/80'
+              : 'border-slate-600/80 bg-slate-950/75 hover:bg-slate-800'
+              " @click="toggleHeatmap">
             {{ showHeatmap ? '隱藏 3D 熱力圖' : '顯示 3D 熱力圖' }}
           </button>
-          <button
-            type="button"
+          <button type="button"
             class="cursor-pointer rounded-lg border border-slate-600/80 bg-slate-950/75 px-3 py-1.5 font-medium text-white backdrop-blur transition hover:bg-slate-800"
-            @click="toggleGrid"
-          >
+            @click="toggleGrid">
             {{ showGrid ? '隱藏格線' : '顯示格線' }}
           </button>
-          <button
-            type="button"
+          <button type="button"
             class="cursor-pointer rounded-lg border border-slate-600/80 bg-slate-950/75 px-3 py-1.5 font-medium text-white backdrop-blur transition hover:bg-slate-800"
-            @click="showTouchControls = !showTouchControls"
-          >
+            @click="showTouchControls = !showTouchControls">
             {{ showTouchControls ? '隱藏搖桿' : '顯示搖桿' }}
           </button>
-          <button
-            type="button"
+          <button type="button"
             class="cursor-pointer rounded-lg border border-sky-500/60 bg-sky-950/75 px-3 py-1.5 font-medium text-sky-100 backdrop-blur transition hover:bg-sky-900/80"
-            @click="restartGame"
-          >
+            @click="restartGame">
             重新開始
           </button>
         </template>
@@ -312,13 +301,13 @@ onBeforeUnmount(() => stage?.dispose())
       </div>
     </div>
 
+    <!-- 右側：房間 IoT 設備控制面板 -->
+    <DevicePanel v-if="!editorMode" :devices="deviceState" @toggle="toggleDevice" />
+
     <!-- 手機／測試用虛擬搖桿與按鈕 -->
-    <TouchControls
-      v-if="!editorMode && showTouchControls && gameState.phase !== 'won' && gameState.phase !== 'lost'"
-      @move="(r, f) => stage?.setVirtualMove(r, f)"
-      @jump="stage?.triggerJump()"
-      @fart="(held) => stage?.setVirtualFart(held)"
-    />
+    <TouchControls v-if="!editorMode && showTouchControls && gameState.phase !== 'won' && gameState.phase !== 'lost'"
+      @move="(r, f) => stage?.setVirtualMove(r, f)" @jump="stage?.triggerJump()"
+      @fart="(held) => stage?.setVirtualFart(held)" />
 
     <!-- 過關 / 失敗結算彈窗 -->
     <ResultModal v-if="!editorMode" :game="gameState" @restart="restartGame" />

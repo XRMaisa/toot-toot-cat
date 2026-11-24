@@ -6,6 +6,7 @@ import {
   isInBounds,
   type GridCoord,
 } from './constants'
+import type { AirflowForce, DeviceSystem } from './devices'
 import type { OccupancyGrid } from './occupancy'
 
 export type HumanAlertLevel = 'calm' | 'suspicious' | 'caught'
@@ -27,6 +28,7 @@ export interface StinkSnapshot {
   readonly suspicion: number
   readonly alertLevel: HumanAlertLevel
   readonly totalInhaled: number
+  readonly totalExhausted: number
   readonly maxCellCount: number
 }
 
@@ -70,8 +72,10 @@ export class StinkSystem {
   private emitCarry = 0
   private suspicion = 0
   private totalInhaled = 0
+  private totalExhausted = 0
   private maxCellCount = 0
   private nextSearchSlot = 0
+  private readonly airflowScratch: AirflowForce = { ax: 0, ay: 0, az: 0 }
 
   reset(): void {
     this.alive.fill(0)
@@ -80,6 +84,7 @@ export class StinkSystem {
     this.emitCarry = 0
     this.suspicion = 0
     this.totalInhaled = 0
+    this.totalExhausted = 0
     this.maxCellCount = 0
     this.nextSearchSlot = 0
   }
@@ -90,6 +95,7 @@ export class StinkSystem {
       suspicion: this.suspicion,
       alertLevel: this.getAlertLevel(),
       totalInhaled: this.totalInhaled,
+      totalExhausted: this.totalExhausted,
       maxCellCount: this.maxCellCount,
     }
   }
@@ -105,6 +111,7 @@ export class StinkSystem {
     emit: StinkEmitParams,
     humanHeadCell: Readonly<GridCoord>,
     rawDt: number,
+    devices?: DeviceSystem,
   ): StinkSnapshot {
     const dt = Math.min(Math.max(rawDt, 0), 0.05)
 
@@ -120,10 +127,11 @@ export class StinkSystem {
       this.emitCarry = 0
     }
 
-    // 2. 更新粒子位置、反彈、人類頭部吸入，並統計進格子
+    // 2. 更新粒子位置、氣流／熱浮力、反彈、門窗排氣、人類頭部吸入，並統計進格子
     this.cellCounts.fill(0)
     let aliveNow = 0
     let inhaledNow = 0
+    let exhaustedNow = 0
     let peakCell = 0
 
     const dragFactor = Math.max(0, 1 - DRAG * dt)
@@ -141,21 +149,42 @@ export class StinkSystem {
       }
       this.age[i] = nextAge
 
-      // 隨機擴散＋自然微浮力＋阻力
-      let vx = ((this.velX[i] ?? 0) + (Math.random() - 0.5) * 2 * DIFFUSION_STRENGTH * dt) * dragFactor
-      let vy =
-        ((this.velY[i] ?? 0) +
-          (BASE_BUOYANCY + (Math.random() - 0.5) * 1.4 * DIFFUSION_STRENGTH) * dt) *
-        dragFactor
-      let vz = ((this.velZ[i] ?? 0) + (Math.random() - 0.5) * 2 * DIFFUSION_STRENGTH * dt) * dragFactor
-
       let px = this.posX[i] ?? 0
       let py = this.posY[i] ?? 0
       let pz = this.posZ[i] ?? 0
 
+      // 採樣房間設備氣流與熱浮力
+      let flowX = 0
+      let flowY = 0
+      let flowZ = 0
+      if (devices) {
+        devices.sampleAirflow(px, py, pz, this.airflowScratch)
+        flowX = this.airflowScratch.ax
+        flowY = this.airflowScratch.ay
+        flowZ = this.airflowScratch.az
+      }
+
+      // 隨機擴散＋設備氣流／熱浮力＋自然微浮力＋阻力
+      let vx =
+        ((this.velX[i] ?? 0) + (flowX + (Math.random() - 0.5) * 2 * DIFFUSION_STRENGTH) * dt) *
+        dragFactor
+      let vy =
+        ((this.velY[i] ?? 0) +
+          (flowY + BASE_BUOYANCY + (Math.random() - 0.5) * 1.4 * DIFFUSION_STRENGTH) * dt) *
+        dragFactor
+      let vz =
+        ((this.velZ[i] ?? 0) + (flowZ + (Math.random() - 0.5) * 2 * DIFFUSION_STRENGTH) * dt) *
+        dragFactor
+
       // 分軸移動＋碰撞家具或牆壁反彈
       const nx = px + vx * dt
       if (this.hitsObstacle(grid, nx, py, pz)) {
+        // 先檢查是否從開啟的西牆窗戶排出
+        if (devices && devices.isExhausted(nx, py, pz)) {
+          this.alive[i] = 0
+          exhaustedNow++
+          continue
+        }
         vx = -vx * BOUNCE_DAMPING
       } else {
         px = nx
@@ -170,6 +199,12 @@ export class StinkSystem {
 
       const nz = pz + vz * dt
       if (this.hitsObstacle(grid, px, py, nz)) {
+        // 檢查是否從開啟的南牆門排出
+        if (devices && devices.isExhausted(px, py, nz)) {
+          this.alive[i] = 0
+          exhaustedNow++
+          continue
+        }
         vz = -vz * BOUNCE_DAMPING
       } else {
         pz = nz
@@ -179,6 +214,12 @@ export class StinkSystem {
       px = Math.min(GRID.NX - 0.02, Math.max(0.02, px))
       py = Math.min(GRID.NY - 0.02, Math.max(0.02, py))
       pz = Math.min(GRID.NZ - 0.02, Math.max(0.02, pz))
+
+      if (devices && devices.isExhausted(px, py, pz)) {
+        this.alive[i] = 0
+        exhaustedNow++
+        continue
+      }
 
       const cx = Math.floor(px)
       const cy = Math.floor(py)
@@ -208,6 +249,7 @@ export class StinkSystem {
     }
 
     this.activeCount = aliveNow
+    this.totalExhausted += exhaustedNow
     this.maxCellCount = peakCell
 
     // 3. 更新懷疑值（0 ~ 100）
