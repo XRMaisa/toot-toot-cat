@@ -81,3 +81,13 @@ export {
   type DeviceId,
   type DeviceState,
 } from './devices'
+
+export { createRng, type RngFn } from './rng'
+
+export {
+  SimulationWorld,
+  type EditorToolKind,
+  type SimulationWorldOptions,
+  type WorldFrame,
+  type WorldStepInput,
+} from './world'

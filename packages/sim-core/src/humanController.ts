@@ -2,6 +2,7 @@ import { GRID, isInBounds, type GridCoord } from './constants'
 import { boxFootprint, type GridEntity, type OccupancyGrid } from './occupancy'
 import { findFloorPath, isFloorWalkableForHuman, type GridXZ } from './pathfinding'
 import type { Vec3 } from './catController'
+import type { RngFn } from './rng'
 
 export type HumanActivity = 'walk' | 'sleep' | 'computer' | 'read' | 'petCat'
 export type HumanPosture = 'stand' | 'sit' | 'sleep'
@@ -74,6 +75,7 @@ export class HumanController {
     private readonly grid: OccupancyGrid,
     private readonly entity: GridEntity,
     private readonly catEntity: GridEntity,
+    private readonly rng: RngFn = Math.random,
   ) {
     this.pos = {
       x: entity.origin.x + 0.5,
@@ -227,7 +229,7 @@ export class HumanController {
     ]
 
     // 隨機微調左右優先順序，避免每次都只放同一邊
-    if (Math.random() < 0.5 && candidates[0] && candidates[1]) {
+    if (this.rng() < 0.5 && candidates[0] && candidates[1]) {
       const tmp = candidates[0]
       candidates[0] = candidates[1]
       candidates[1] = tmp
@@ -342,7 +344,7 @@ export class HumanController {
       return
     }
 
-    const chosen = pool[Math.floor(Math.random() * pool.length)]
+    const chosen = pool[Math.floor(this.rng() * pool.length)]
     if (!chosen) {
       this.actionTimer = ACTIVITY_DURATION
       return
@@ -385,7 +387,7 @@ export class HumanController {
         approachCell: randomFloor,
         interactOrigin: { x: randomFloor.x, y: 0, z: randomFloor.z },
         interactPosture: 'stand',
-        interactFacingYaw: Math.random() * Math.PI * 2,
+        interactFacingYaw: this.rng() * Math.PI * 2,
       })
     }
 
@@ -467,8 +469,8 @@ export class HumanController {
 
   private pickRandomWalkableCell(): GridXZ | null {
     for (let tries = 0; tries < 40; tries++) {
-      const x = Math.floor(Math.random() * GRID.NX)
-      const z = Math.floor(Math.random() * GRID.NZ)
+      const x = Math.floor(this.rng() * GRID.NX)
+      const z = Math.floor(this.rng() * GRID.NZ)
       if (x === this.entity.origin.x && z === this.entity.origin.z) continue
       if (isFloorWalkableForHuman(this.grid, x, z, this.entity.id, this.catEntity.id)) {
         return { x, z }

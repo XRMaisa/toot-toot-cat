@@ -8,6 +8,7 @@ import {
 } from './constants'
 import type { AirflowForce, DeviceSystem } from './devices'
 import type { OccupancyGrid } from './occupancy'
+import type { RngFn } from './rng'
 
 export type HumanAlertLevel = 'calm' | 'suspicious' | 'caught'
 
@@ -76,6 +77,11 @@ export class StinkSystem {
   private maxCellCount = 0
   private nextSearchSlot = 0
   private readonly airflowScratch: AirflowForce = { ax: 0, ay: 0, az: 0 }
+  private readonly rng: RngFn
+
+  constructor(rng: RngFn = Math.random) {
+    this.rng = rng
+  }
 
   reset(): void {
     this.alive.fill(0)
@@ -166,14 +172,14 @@ export class StinkSystem {
 
       // 隨機擴散＋設備氣流／熱浮力＋自然微浮力＋阻力
       let vx =
-        ((this.velX[i] ?? 0) + (flowX + (Math.random() - 0.5) * 2 * DIFFUSION_STRENGTH) * dt) *
+        ((this.velX[i] ?? 0) + (flowX + (this.rng() - 0.5) * 2 * DIFFUSION_STRENGTH) * dt) *
         dragFactor
       let vy =
         ((this.velY[i] ?? 0) +
-          (flowY + BASE_BUOYANCY + (Math.random() - 0.5) * 1.4 * DIFFUSION_STRENGTH) * dt) *
+          (flowY + BASE_BUOYANCY + (this.rng() - 0.5) * 1.4 * DIFFUSION_STRENGTH) * dt) *
         dragFactor
       let vz =
-        ((this.velZ[i] ?? 0) + (flowZ + (Math.random() - 0.5) * 2 * DIFFUSION_STRENGTH) * dt) *
+        ((this.velZ[i] ?? 0) + (flowZ + (this.rng() - 0.5) * 2 * DIFFUSION_STRENGTH) * dt) *
         dragFactor
 
       // 分軸移動＋碰撞家具或牆壁反彈
@@ -274,9 +280,9 @@ export class StinkSystem {
     const slot = this.findFreeSlot()
     if (slot < 0) return
 
-    let sx = emit.x + (Math.random() - 0.5) * 0.18
-    let sy = emit.y + (Math.random() - 0.5) * 0.14
-    let sz = emit.z + (Math.random() - 0.5) * 0.18
+    let sx = emit.x + (this.rng() - 0.5) * 0.18
+    let sy = emit.y + (this.rng() - 0.5) * 0.14
+    let sz = emit.z + (this.rng() - 0.5) * 0.18
 
     // 如果屁股緊貼牆壁或家具，退回貓咪中心一點避免生在障礙物裡
     if (this.hitsObstacle(grid, sx, sy, sz)) {
@@ -287,16 +293,16 @@ export class StinkSystem {
     sy = Math.min(GRID.NY - 0.05, Math.max(0.05, sy))
     sz = Math.min(GRID.NZ - 0.05, Math.max(0.05, sz))
 
-    const speed = 1.1 + Math.random() * 1.0
+    const speed = 1.1 + this.rng() * 1.0
     this.posX[slot] = sx
     this.posY[slot] = sy
     this.posZ[slot] = sz
-    this.velX[slot] = emit.dirX * speed + (Math.random() - 0.5) * 0.9
-    this.velY[slot] = 0.25 + Math.random() * 0.45
-    this.velZ[slot] = emit.dirZ * speed + (Math.random() - 0.5) * 0.9
+    this.velX[slot] = emit.dirX * speed + (this.rng() - 0.5) * 0.9
+    this.velY[slot] = 0.25 + this.rng() * 0.45
+    this.velZ[slot] = emit.dirZ * speed + (this.rng() - 0.5) * 0.9
     this.age[slot] = 0
     this.maxAge[slot] =
-      PARTICLE_MIN_LIFE + Math.random() * (PARTICLE_MAX_LIFE - PARTICLE_MIN_LIFE)
+      PARTICLE_MIN_LIFE + this.rng() * (PARTICLE_MAX_LIFE - PARTICLE_MIN_LIFE)
     this.alive[slot] = 1
   }
 

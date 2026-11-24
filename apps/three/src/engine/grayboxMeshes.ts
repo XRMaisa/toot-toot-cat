@@ -15,11 +15,13 @@ const ENTITY_COLORS: Record<EntityKind, number> = {
   chair: 0x2dd4bf,
 }
 
-const EDGE_MATERIAL = new THREE.LineBasicMaterial({
+export const SHARED_EDGE_MATERIAL = new THREE.LineBasicMaterial({
   color: 0x1e293b,
   transparent: true,
   opacity: 0.45,
 })
+
+export const SHARED_GRAYBOX_MATERIALS: ReadonlySet<THREE.Material> = new Set([SHARED_EDGE_MATERIAL])
 
 function addBoxWithEdges(
   group: THREE.Group,
@@ -36,7 +38,7 @@ function addBoxWithEdges(
   mesh.receiveShadow = true
   group.add(mesh)
 
-  const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo), EDGE_MATERIAL)
+  const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo), SHARED_EDGE_MATERIAL)
   edges.position.copy(mesh.position)
   group.add(edges)
 }

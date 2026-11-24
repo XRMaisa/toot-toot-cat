@@ -2,32 +2,29 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { VRButton } from 'three/examples/jsm/webxr/VRButton.js'
 import {
-  CatController,
-  DeviceSystem,
   ENTITY_SPECS,
   GRID,
-  GameLoop,
-  HumanController,
   LEVEL_01,
   ROOM_SIZE,
-  StinkSystem,
-  defaultFootprint,
+  SimulationWorld,
   isInBounds,
-  loadLevel,
   type CatState,
   type DeviceId,
   type DeviceState,
+  type EditorToolKind,
   type EntityKind,
-  type FurnitureKind,
   type GameLoopSnapshot,
   type GamePhase,
   type HumanState,
   type LevelData,
-  type LoadedLevel,
   type StinkSnapshot,
+  type WorldFrame,
 } from '@toot/sim-core'
 import { DeviceVisuals } from './deviceMeshes'
+import { disposeObject3D } from './dispose'
+import { EditorOverlay } from './editorOverlay'
 import {
+  SHARED_GRAYBOX_MATERIALS,
   createCatMesh,
   createGrayboxMesh,
   createHumanMesh,
@@ -37,7 +34,7 @@ import {
 import { InputManager } from './inputState'
 import { StinkVisuals } from './stinkVisuals'
 
-export type EditorTool = EntityKind | 'erase'
+export type EditorTool = EditorToolKind
 
 export interface HoverCellInfo {
   readonly x: number
@@ -69,8 +66,8 @@ export interface ThreeStageCallbacks {
 const WORLD_UP = new THREE.Vector3(0, 1, 0)
 
 /**
- * Three.js 場景外殼：房間 / 灰盒物件 / 貓咪控制 / 人類 AI / 臭氣粒子 / 關卡循環 / 關卡編輯器 / WebXR。
- * 主迴圈與模擬資料不放進 Vue 響應式，只透過 callback 節流同步 HUD。
+ * Three.js 場景外殼：只負責 WebGL 渲染、鏡頭、燈光、輸入投影與視覺同步。
+ * 所有模擬規則、5 系統編排與編輯器驗證全部委派給 @toot/sim-core 的 SimulationWorld。
  */
 export class ThreeStage {
   private readonly renderer: THREE.WebGLRenderer
@@ -80,24 +77,19 @@ export class ThreeStage {
   private readonly vrButton: HTMLElement
   private readonly resizeObserver: ResizeObserver
 
-  private currentLevelData: LevelData = LEVEL_01
-  private level!: LoadedLevel
-  private catController!: CatController
-  private humanController!: HumanController
-  private gameLoop!: GameLoop
-  private catRig!: CatMeshRig
-  private humanRig?: HumanMeshRig
-  private readonly stinkSystem = new StinkSystem()
-  private readonly stinkVisuals = new StinkVisuals()
-  private readonly deviceSystem = new DeviceSystem()
+  private readonly world = new SimulationWorld(LEVEL_01)
+  private readonly editorOverlay = new EditorOverlay()
   private readonly deviceVisuals = new DeviceVisuals()
+  private readonly stinkVisuals = new StinkVisuals()
   private readonly input: InputManager
 
+  private catRig!: CatMeshRig
+  private humanRig?: HumanMeshRig
+
+  private readonly roomGroup = new THREE.Group()
   private readonly entityGroup = new THREE.Group()
   private readonly gridHelperGroup = new THREE.Group()
   private readonly hoverTile: THREE.Mesh
-  private readonly ghostMesh: THREE.Mesh
-  private readonly ghostMat: THREE.MeshBasicMaterial
 
   private readonly raycaster = new THREE.Raycaster()
   private readonly pointerNdc = new THREE.Vector2()
@@ -105,17 +97,12 @@ export class ThreeStage {
   private readonly hitPoint = new THREE.Vector3()
   private readonly camForward = new THREE.Vector3()
   private readonly camRight = new THREE.Vector3()
-
-  private editorMode = false
-  private editorTool: EditorTool = 'bed'
-  private rightDownScreen = { x: 0, y: 0 }
+  private readonly prevCatPos = new THREE.Vector3()
 
   private lastHoverKey = ''
   private lastStatsTime = 0
   private lastHudTime = 0
   private lastFrameTime = performance.now()
-  private prevCatPos = new THREE.Vector3()
-  private lastCatGrounded = true
   private lastPhase: GamePhase = 'playing'
 
   constructor(
@@ -154,23 +141,17 @@ export class ThreeStage {
     this.buildRoom()
     this.buildGridHelpers()
     this.hoverTile = this.buildHoverTile()
-    this.scene.add(this.hoverTile)
+    this.scene.add(
+      this.roomGroup,
+      this.gridHelperGroup,
+      this.hoverTile,
+      this.editorOverlay.ghostMesh,
+      this.entityGroup,
+      this.deviceVisuals.group,
+      this.stinkVisuals.group,
+    )
 
-    this.ghostMat = new THREE.MeshBasicMaterial({
-      color: 0x22c55e,
-      transparent: true,
-      opacity: 0.42,
-      depthWrite: false,
-    })
-    this.ghostMesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), this.ghostMat)
-    this.ghostMesh.visible = false
-    this.scene.add(this.ghostMesh)
-
-    this.scene.add(this.entityGroup)
-    this.scene.add(this.deviceVisuals.group)
-    this.scene.add(this.stinkVisuals.group)
-
-    this.initLevel(LEVEL_01)
+    this.syncLevelFromWorld(this.world.getFrame())
 
     this.renderer.domElement.addEventListener('pointermove', this.onPointerMove)
     this.renderer.domElement.addEventListener('pointerleave', this.onPointerLeave)
@@ -183,27 +164,24 @@ export class ThreeStage {
     this.renderer.setAnimationLoop(() => this.tick())
   }
 
-  /** 重新開始目前關卡（或載入新的關卡資料） */
   restart(levelData?: LevelData): void {
-    this.initLevel(levelData ?? this.currentLevelData)
+    const frame = this.world.reset(levelData)
+    this.syncLevelFromWorld(frame)
   }
 
-  /** 切換遊玩模式 / 極簡關卡編輯模式 */
   setEditorMode(enabled: boolean): void {
-    this.editorMode = enabled
-    this.ghostMesh.visible = false
-    this.initLevel(this.currentLevelData)
+    this.editorOverlay.setActive(enabled)
+    const frame = this.world.reset()
+    this.syncLevelFromWorld(frame)
 
     if (enabled) {
       this.gridHelperGroup.visible = true
-      this.camera.position.set(ROOM_SIZE.width / 2, 19, ROOM_SIZE.depth + 8)
-      this.controls.target.set(ROOM_SIZE.width / 2, 0.5, ROOM_SIZE.depth / 2)
-      this.controls.update()
+      this.focusOverviewCamera()
     }
   }
 
   setEditorTool(tool: EditorTool): void {
-    this.editorTool = tool
+    this.editorOverlay.setTool(tool)
   }
 
   updateLevelMeta(meta: {
@@ -212,23 +190,15 @@ export class ThreeStage {
     parTime: number
     parPresses: number
   }): void {
-    this.currentLevelData = {
-      ...this.currentLevelData,
-      name: meta.name,
-      fartQuota: meta.fartQuota,
-      parTime: meta.parTime,
-      parPresses: meta.parPresses,
-    }
-    this.callbacks.onLevelChange?.(this.currentLevelData)
+    const updated = this.world.updateLevelMeta(meta)
+    this.callbacks.onLevelChange?.(updated)
   }
 
   importLevel(data: LevelData): void {
-    this.currentLevelData = data
-    this.initLevel(data)
-    if (this.editorMode) {
-      this.camera.position.set(ROOM_SIZE.width / 2, 19, ROOM_SIZE.depth + 8)
-      this.controls.target.set(ROOM_SIZE.width / 2, 0.5, ROOM_SIZE.depth / 2)
-      this.controls.update()
+    const frame = this.world.reset(data)
+    this.syncLevelFromWorld(frame)
+    if (this.editorOverlay.isActive) {
+      this.focusOverviewCamera()
     }
   }
 
@@ -241,7 +211,7 @@ export class ThreeStage {
   }
 
   toggleDevice(id: DeviceId): void {
-    const next = this.deviceSystem.toggle(id)
+    const next = this.world.toggleDevice(id)
     this.callbacks.onDeviceState?.(next)
   }
 
@@ -257,56 +227,78 @@ export class ThreeStage {
     this.input.setVirtualFart(held)
   }
 
-  private initLevel(data: LevelData): void {
-    this.currentLevelData = data
-    this.humanRig?.dispose()
+  private focusOverviewCamera(): void {
+    this.camera.position.set(ROOM_SIZE.width / 2, 19, ROOM_SIZE.depth + 8)
+    this.controls.target.set(ROOM_SIZE.width / 2, 0.5, ROOM_SIZE.depth / 2)
+    this.controls.update()
+  }
 
-    this.level = loadLevel(data)
-    this.catController = new CatController(this.level.grid, this.level.cat)
-    this.humanController = new HumanController(
-      this.level.grid,
-      this.level.human,
-      this.level.cat,
-    )
-    this.gameLoop = new GameLoop(data)
-    this.stinkSystem.reset()
-    this.stinkVisuals.update(this.stinkSystem)
-    this.deviceSystem.reset()
-    this.deviceVisuals.update(this.deviceSystem.getState(), 0)
+  private syncLevelFromWorld(frame: WorldFrame): void {
+    if (this.catRig) disposeObject3D(this.catRig.group, SHARED_GRAYBOX_MATERIALS)
+    if (this.humanRig) {
+      this.humanRig.dispose()
+      disposeObject3D(this.humanRig.group, SHARED_GRAYBOX_MATERIALS)
+    }
+    this.clearEntities()
 
-    this.catRig = createCatMesh(this.level.cat)
-    this.humanRig = createHumanMesh(this.level.human)
-    this.syncEntitiesFromGrid()
+    this.catRig = createCatMesh(this.world.catEntity)
+    this.humanRig = createHumanMesh(this.world.humanEntity)
+    this.rebuildEntityMeshes()
 
-    const initialCat = this.catController.getState()
-    const initialHuman = this.humanController.getState()
-    const initialGame = this.gameLoop.getSnapshot()
+    this.stinkVisuals.update(this.world.stink)
+    this.deviceVisuals.update(frame.devices, 0)
 
-    this.prevCatPos.set(initialCat.position.x, initialCat.position.y, initialCat.position.z)
-    this.lastCatGrounded = true
-    this.lastPhase = initialGame.phase
+    this.prevCatPos.set(frame.cat.position.x, frame.cat.position.y, frame.cat.position.z)
+    this.lastPhase = frame.game.phase
     this.lastFrameTime = performance.now()
 
-    if (!this.editorMode) {
+    if (!this.editorOverlay.isActive) {
       this.camera.position.set(
-        initialCat.position.x + 7,
-        initialCat.position.y + 7.5,
-        initialCat.position.z + 9,
+        frame.cat.position.x + 7,
+        frame.cat.position.y + 7.5,
+        frame.cat.position.z + 9,
       )
       this.controls.target.set(
-        initialCat.position.x,
-        initialCat.position.y + 0.8,
-        initialCat.position.z,
+        frame.cat.position.x,
+        frame.cat.position.y + 0.8,
+        frame.cat.position.z,
       )
       this.controls.update()
     }
 
-    this.callbacks.onCatState?.(initialCat)
-    this.callbacks.onHumanState?.(initialHuman)
-    this.callbacks.onStinkState?.(this.stinkSystem.getSnapshot())
-    this.callbacks.onGameState?.(initialGame)
-    this.callbacks.onLevelChange?.(this.currentLevelData)
-    this.callbacks.onDeviceState?.(this.deviceSystem.getState())
+    this.emitHudCallbacks(frame)
+    this.callbacks.onLevelChange?.(this.world.getLevelData())
+  }
+
+  private clearEntities(): void {
+    for (const child of this.entityGroup.children) {
+      if (child === this.catRig?.group || child === this.humanRig?.group) continue
+      disposeObject3D(child, SHARED_GRAYBOX_MATERIALS)
+    }
+    this.entityGroup.clear()
+  }
+
+  private rebuildEntityMeshes(): void {
+    this.clearEntities()
+    for (const entity of this.world.grid.getAllEntities()) {
+      if (entity.id === this.world.catEntity.id) {
+        this.catRig.group.position.set(entity.origin.x + 0.5, entity.origin.y, entity.origin.z + 0.5)
+        this.entityGroup.add(this.catRig.group)
+      } else if (entity.id === this.world.humanEntity.id && this.humanRig) {
+        this.humanRig.group.position.set(entity.origin.x + 0.5, entity.origin.y, entity.origin.z + 0.5)
+        this.entityGroup.add(this.humanRig.group)
+      } else {
+        this.entityGroup.add(createGrayboxMesh(entity))
+      }
+    }
+  }
+
+  private emitHudCallbacks(frame: WorldFrame): void {
+    this.callbacks.onCatState?.(frame.cat)
+    this.callbacks.onHumanState?.(frame.human)
+    this.callbacks.onStinkState?.(frame.stink)
+    this.callbacks.onGameState?.(frame.game)
+    this.callbacks.onDeviceState?.(frame.devices)
   }
 
   private buildLights(): void {
@@ -325,8 +317,7 @@ export class ThreeStage {
     sun.shadow.camera.top = extent
     sun.shadow.camera.bottom = -extent
     sun.shadow.bias = -0.0005
-    this.scene.add(sun)
-    this.scene.add(sun.target)
+    this.scene.add(sun, sun.target)
   }
 
   private buildRoom(): void {
@@ -339,7 +330,7 @@ export class ThreeStage {
     floor.rotation.x = -Math.PI / 2
     floor.position.set(width / 2, 0, depth / 2)
     floor.receiveShadow = true
-    this.scene.add(floor)
+    this.roomGroup.add(floor)
 
     const walls = new THREE.Mesh(
       new THREE.BoxGeometry(width, height, depth),
@@ -351,7 +342,7 @@ export class ThreeStage {
     )
     walls.position.set(width / 2, height / 2, depth / 2)
     walls.receiveShadow = true
-    this.scene.add(walls)
+    this.roomGroup.add(walls)
   }
 
   private buildGridHelpers(): void {
@@ -371,8 +362,6 @@ export class ThreeStage {
     const axes = new THREE.AxesHelper(2.2)
     axes.position.set(0, 0.02, 0)
     this.gridHelperGroup.add(axes)
-
-    this.scene.add(this.gridHelperGroup)
   }
 
   private buildHoverTile(): THREE.Mesh {
@@ -391,19 +380,6 @@ export class ThreeStage {
     return tile
   }
 
-  private syncEntitiesFromGrid(): void {
-    this.entityGroup.clear()
-    for (const entity of this.level.grid.getAllEntities()) {
-      if (entity.id === this.level.cat.id) {
-        this.entityGroup.add(this.catRig.group)
-      } else if (entity.id === this.level.human.id && this.humanRig) {
-        this.entityGroup.add(this.humanRig.group)
-      } else {
-        this.entityGroup.add(createGrayboxMesh(entity))
-      }
-    }
-  }
-
   private pickFloorCell(e: PointerEvent): { x: number; z: number } | null {
     const rect = this.renderer.domElement.getBoundingClientRect()
     this.pointerNdc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1
@@ -418,116 +394,19 @@ export class ThreeStage {
     return isInBounds(cx, 0, cz) ? { x: cx, z: cz } : null
   }
 
-  private canApplyEditorTool(cx: number, cz: number): boolean {
-    if (this.editorTool === 'erase') {
-      const target = this.level.grid.getEntityAt(cx, 0, cz)
-      return Boolean(target && target.kind !== 'cat' && target.kind !== 'human')
-    }
-    const ignoreId =
-      this.editorTool === 'cat'
-        ? this.level.cat.id
-        : this.editorTool === 'human'
-          ? this.level.human.id
-          : 0
-    return this.level.grid.canPlace(
-      { x: cx, y: 0, z: cz },
-      defaultFootprint(this.editorTool),
-      ignoreId,
-    )
-  }
-
-  private updateEditorGhost(cx: number, cz: number): void {
-    const valid = this.canApplyEditorTool(cx, cz)
-    if (this.editorTool === 'erase') {
-      this.ghostMesh.scale.set(1, 0.15, 1)
-      this.ghostMesh.position.set(cx + 0.5, 0.08, cz + 0.5)
-      this.ghostMat.color.setHex(valid ? 0xf43f5e : 0x64748b)
-    } else {
-      const { x: sx, y: sy, z: sz } = ENTITY_SPECS[this.editorTool].size
-      this.ghostMesh.scale.set(sx, sy, sz)
-      this.ghostMesh.position.set(cx + sx / 2, sy / 2, cz + sz / 2)
-      this.ghostMat.color.setHex(valid ? 0x22c55e : 0xef4444)
-    }
-    this.ghostMesh.visible = true
-  }
-
-  private rebuildLevelDataFromGrid(): void {
-    const furniture: Array<{ type: FurnitureKind; x: number; z: number }> = []
-    for (const ent of this.level.grid.getAllEntities()) {
-      if (ent.kind === 'bed' || ent.kind === 'desk' || ent.kind === 'chair') {
-        furniture.push({ type: ent.kind, x: ent.origin.x, z: ent.origin.z })
-      }
-    }
-    this.currentLevelData = {
-      ...this.currentLevelData,
-      furniture,
-      cat: { x: this.level.cat.origin.x, z: this.level.cat.origin.z },
-      human: { x: this.level.human.origin.x, z: this.level.human.origin.z },
-    }
-    this.callbacks.onLevelChange?.(this.currentLevelData)
-  }
-
-  private eraseFurnitureAt(cx: number, cz: number): void {
-    const target = this.level.grid.getEntityAt(cx, 0, cz)
-    if (!target || target.kind === 'cat' || target.kind === 'human') return
-    this.level.grid.remove(target.id)
-    this.syncEntitiesFromGrid()
-    this.rebuildLevelDataFromGrid()
-  }
-
-  private applyEditorToolAt(cx: number, cz: number): void {
-    if (this.editorTool === 'erase') {
-      this.eraseFurnitureAt(cx, cz)
-      return
-    }
-    if (!this.canApplyEditorTool(cx, cz)) return
-
-    if (this.editorTool === 'cat') {
-      if (this.level.grid.move(this.level.cat.id, { x: cx, y: 0, z: cz })) {
-        this.catRig.group.position.set(cx + 0.5, 0, cz + 0.5)
-        this.rebuildLevelDataFromGrid()
-      }
-    } else if (this.editorTool === 'human') {
-      if (this.level.grid.move(this.level.human.id, { x: cx, y: 0, z: cz })) {
-        this.humanRig?.group.position.set(cx + 0.5, 0, cz + 0.5)
-        this.rebuildLevelDataFromGrid()
-      }
-    } else {
-      if (this.level.grid.place(this.editorTool, { x: cx, y: 0, z: cz })) {
-        this.syncEntitiesFromGrid()
-        this.rebuildLevelDataFromGrid()
-      }
-    }
-  }
-
   private readonly onCanvasPointerDown = (e: PointerEvent): void => {
-    if (!this.editorMode) return
-    if (e.button === 2) {
-      this.rightDownScreen = { x: e.clientX, y: e.clientY }
-      return
-    }
-    if (e.button === 0) {
-      const cell = this.pickFloorCell(e)
-      if (cell) {
-        this.applyEditorToolAt(cell.x, cell.z)
-        this.updateEditorGhost(cell.x, cell.z)
-      }
+    const changed = this.editorOverlay.handlePointerDown(e, this.pickFloorCell(e), this.world)
+    if (changed) {
+      this.rebuildEntityMeshes()
+      this.callbacks.onLevelChange?.(this.world.getLevelData())
     }
   }
 
   private readonly onCanvasPointerUp = (e: PointerEvent): void => {
-    if (!this.editorMode || e.button !== 2) return
-    // 右鍵輕點（未拖曳旋轉視角）→ 快速刪除該格家具
-    const dragDist = Math.hypot(
-      e.clientX - this.rightDownScreen.x,
-      e.clientY - this.rightDownScreen.y,
-    )
-    if (dragDist < 5) {
-      const cell = this.pickFloorCell(e)
-      if (cell) {
-        this.eraseFurnitureAt(cell.x, cell.z)
-        this.updateEditorGhost(cell.x, cell.z)
-      }
+    const changed = this.editorOverlay.handlePointerUp(e, this.pickFloorCell(e), this.world)
+    if (changed) {
+      this.rebuildEntityMeshes()
+      this.callbacks.onLevelChange?.(this.world.getLevelData())
     }
   }
 
@@ -538,11 +417,11 @@ export class ThreeStage {
       return
     }
 
-    if (this.editorMode) {
+    if (this.editorOverlay.isActive) {
       this.hoverTile.visible = false
-      this.updateEditorGhost(cell.x, cell.z)
+      this.editorOverlay.updateGhost(this.world, cell.x, cell.z)
     } else {
-      this.ghostMesh.visible = false
+      this.editorOverlay.hide()
       this.hoverTile.position.set(cell.x + 0.5, 0.015, cell.z + 0.5)
       this.hoverTile.visible = true
     }
@@ -551,7 +430,7 @@ export class ThreeStage {
     if (key === this.lastHoverKey) return
     this.lastHoverKey = key
 
-    const occupants = this.level.grid.getColumnEntities(cell.x, cell.z).map((ent) => ({
+    const occupants = this.world.grid.getColumnEntities(cell.x, cell.z).map((ent) => ({
       id: ent.id,
       kind: ent.kind,
       label: ENTITY_SPECS[ent.kind].label,
@@ -565,7 +444,7 @@ export class ThreeStage {
 
   private clearHover(): void {
     this.hoverTile.visible = false
-    this.ghostMesh.visible = false
+    this.editorOverlay.hide()
     if (this.lastHoverKey !== '') {
       this.lastHoverKey = ''
       this.callbacks.onHoverCell?.(null)
@@ -582,39 +461,16 @@ export class ThreeStage {
 
   private tick(): void {
     const now = performance.now()
-    const timeSec = now / 1000
     const dt = (now - this.lastFrameTime) / 1000
     this.lastFrameTime = now
 
-    // 編輯模式或遊戲結束時僅更新鏡頭與渲染，暫停模擬
-    if (this.editorMode || this.gameLoop.isEnded()) {
+    if (this.editorOverlay.isActive || this.world.isEnded()) {
       this.controls.update()
       this.renderer.render(this.scene, this.camera)
       return
     }
 
-    // 1. 更新人類 AI
-    const humanState = this.humanController.step(this.prevCatPos, this.lastCatGrounded, dt)
-    const isBeingPetted = humanState.petCatHoldPos !== null
-
-    if (humanState.petCatHoldPos) {
-      const petBounce = Math.abs(Math.sin(timeSec * 18)) * 0.05
-      this.catController.teleportTo(
-        humanState.petCatHoldPos.x,
-        humanState.petCatHoldPos.y + petBounce,
-        humanState.petCatHoldPos.z,
-        false,
-      )
-    } else if (humanState.releaseCatCell) {
-      this.catController.teleportTo(
-        humanState.releaseCatCell.x + 0.5,
-        humanState.releaseCatCell.y,
-        humanState.releaseCatCell.z + 0.5,
-        true,
-      )
-    }
-
-    // 2. 鏡頭投影方向
+    // 1. 依鏡頭方向投影操作輸入
     this.camera.getWorldDirection(this.camForward)
     this.camForward.y = 0
     if (this.camForward.lengthSq() < 1e-6) {
@@ -624,57 +480,29 @@ export class ThreeStage {
     }
     this.camRight.crossVectors(this.camForward, WORLD_UP).normalize()
 
-    // 3. 更新貓咪
     const raw = this.input.consumeSnapshot()
-    const moveX = this.camForward.x * raw.forward + this.camRight.x * raw.right
-    const moveZ = this.camForward.z * raw.forward + this.camRight.z * raw.right
-
-    const catState = this.catController.step(
+    const frame = this.world.step(
       {
-        moveX,
-        moveZ,
+        moveX: this.camForward.x * raw.forward + this.camRight.x * raw.right,
+        moveZ: this.camForward.z * raw.forward + this.camRight.z * raw.right,
         jumpJustPressed: raw.jumpJustPressed,
-        fartHeld: raw.fartHeld && this.gameLoop.canEmitFart(),
-        locked: isBeingPetted,
+        fartHeld: raw.fartHeld,
       },
       dt,
     )
-    this.lastCatGrounded = catState.grounded
 
-    const { x, y, z } = catState.position
+    // 2. 將 WorldFrame 同步到 Three.js 視覺層
+    const { x, y, z } = frame.cat.position
     this.catRig.group.position.set(x, y, z)
-    this.catRig.group.rotation.y = catState.facingYaw
-    this.catRig.setFarting(catState.isFarting)
+    this.catRig.group.rotation.y = frame.cat.facingYaw
+    this.catRig.setFarting(frame.cat.isFarting)
 
-    // 4. 更新人類外觀姿勢與房間 IoT 設備
-    this.humanRig?.updateState(humanState, timeSec)
-    const deviceState = this.deviceSystem.step(dt)
-    this.deviceVisuals.update(deviceState, dt)
+    this.humanRig?.updateState(frame.human, frame.timeSec)
+    this.humanRig?.setAlert(frame.stink.alertLevel)
+    this.deviceVisuals.update(frame.devices, dt)
+    this.stinkVisuals.update(this.world.stink)
 
-    // 5. 更新臭氣粒子、氣流／熱浮力、門窗排氣與頭部吸入
-    const backX = -Math.sin(catState.facingYaw)
-    const backZ = -Math.cos(catState.facingYaw)
-    const stinkSnapshot = this.stinkSystem.step(
-      this.level.grid,
-      {
-        active: catState.isFarting,
-        x: x + backX * 0.44,
-        y: y + 0.36,
-        z: z + backZ * 0.44,
-        dirX: backX,
-        dirZ: backZ,
-      },
-      humanState.headCell,
-      dt,
-      this.deviceSystem,
-    )
-    this.stinkVisuals.update(this.stinkSystem)
-    this.humanRig?.setAlert(stinkSnapshot.alertLevel)
-
-    // 6. 更新關卡循環
-    const gameSnapshot = this.gameLoop.step(catState.isFarting, stinkSnapshot.suspicion, dt)
-
-    // 7. 鏡頭跟隨貓咪
+    // 3. 鏡頭跟隨貓咪
     const dx = x - this.prevCatPos.x
     const dy = y - this.prevCatPos.y
     const dz = z - this.prevCatPos.z
@@ -689,22 +517,18 @@ export class ThreeStage {
     this.controls.update()
     this.renderer.render(this.scene, this.camera)
 
-    // 8. 節流同步 HUD
-    const phaseChanged = gameSnapshot.phase !== this.lastPhase
-    this.lastPhase = gameSnapshot.phase
-
+    // 4. 節流同步 HUD
+    const phaseChanged = frame.game.phase !== this.lastPhase
+    this.lastPhase = frame.game.phase
     if (phaseChanged || now - this.lastHudTime >= 100) {
       this.lastHudTime = now
-      this.callbacks.onCatState?.(catState)
-      this.callbacks.onHumanState?.(humanState)
-      this.callbacks.onStinkState?.(stinkSnapshot)
-      this.callbacks.onGameState?.(gameSnapshot)
+      this.emitHudCallbacks(frame)
     }
 
     if (now - this.lastStatsTime >= 250) {
       this.lastStatsTime = now
       this.callbacks.onStats?.({
-        entityCount: this.level.grid.getAllEntities().length,
+        entityCount: this.world.grid.getAllEntities().length,
         drawCalls: this.renderer.info.render.calls,
         triangles: this.renderer.info.render.triangles,
       })
@@ -715,9 +539,13 @@ export class ThreeStage {
     this.renderer.setAnimationLoop(null)
     this.input.dispose()
     this.stinkVisuals.dispose()
+    this.deviceVisuals.dispose()
+    this.editorOverlay.dispose()
     this.humanRig?.dispose()
-    this.ghostMesh.geometry.dispose()
-    this.ghostMat.dispose()
+    disposeObject3D(this.entityGroup, SHARED_GRAYBOX_MATERIALS)
+    disposeObject3D(this.roomGroup)
+    disposeObject3D(this.gridHelperGroup)
+    disposeObject3D(this.hoverTile)
     this.renderer.domElement.removeEventListener('pointermove', this.onPointerMove)
     this.renderer.domElement.removeEventListener('pointerleave', this.onPointerLeave)
     this.renderer.domElement.removeEventListener('pointerdown', this.onCanvasPointerDown)

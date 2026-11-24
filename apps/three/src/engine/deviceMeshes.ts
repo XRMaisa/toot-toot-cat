@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { DEVICE_LAYOUT, type DeviceState } from '@toot/sim-core'
+import { disposeObject3D } from './dispose'
 
 /**
  * 房間 5 項可動 IoT 設備的 3D 模型（電風扇、冷氣、電腦主機、窗戶、門）。
@@ -213,5 +214,9 @@ export class DeviceVisuals {
     const targetDoorAngle = state.doorOpen ? -1.25 : 0
     this.doorAngle += (targetDoorAngle - this.doorAngle) * Math.min(1, dt * 8)
     this.doorLeafPivot.rotation.y = this.doorAngle
+  }
+
+  dispose(): void {
+    disposeObject3D(this.group)
   }
 }

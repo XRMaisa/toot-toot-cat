@@ -1,4 +1,4 @@
-import { CELL_COUNT, cellIndex, isInBounds, type GridCoord } from './constants'
+import { CELL_COUNT, GRID, cellIndex, isInBounds, type GridCoord } from './constants'
 
 export type FurnitureKind = 'bed' | 'desk' | 'chair'
 export type ActorKind = 'cat' | 'human'
@@ -150,7 +150,7 @@ export class OccupancyGrid {
   getColumnEntities(x: number, z: number): GridEntity[] {
     const seen = new Set<number>()
     const result: GridEntity[] = []
-    for (let y = 0; y < 10; y++) {
+    for (let y = 0; y < GRID.NY; y++) {
       const id = this.getCell(x, y, z)
       if (id > 0 && !seen.has(id)) {
         seen.add(id)
