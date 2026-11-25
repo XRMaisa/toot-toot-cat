@@ -17,12 +17,12 @@ export class StinkVisuals {
   private lastHeatmapCount = -1
 
   constructor() {
-    // 1. 柔和黃綠色臭氣雲粒子
-    const particleGeo = new THREE.SphereGeometry(0.18, 8, 6)
+    // 1. 柔和黃綠色臭氣雲粒子（一開始就大顆蓬鬆）
+    const particleGeo = new THREE.SphereGeometry(0.28, 8, 6)
     const particleMat = new THREE.MeshBasicMaterial({
       color: 0xa3e635,
       transparent: true,
-      opacity: 0.5,
+      opacity: 0.42,
       depthWrite: false,
     })
     this.particleMesh = new THREE.InstancedMesh(particleGeo, particleMat, MAX_STINK_PARTICLES)
@@ -56,14 +56,14 @@ export class StinkVisuals {
       if (stink.alive[i] === 0) continue
 
       const lifeRatio = (stink.age[i] ?? 0) / Math.max(0.01, stink.maxAge[i] ?? 1)
-      // 剛噴出快速膨脹，快消失時縮小淡出
-      let scale = 1
-      if (lifeRatio < 0.12) {
-        scale = 0.4 + (lifeRatio / 0.12) * 0.7
+      // 一開始就維持較大尺寸，中段微幅膨脹，最後 28% 平滑縮小淡出
+      let scale = 1.15
+      if (lifeRatio < 0.08) {
+        scale = 0.9 + (lifeRatio / 0.08) * 0.35
       } else if (lifeRatio > 0.72) {
-        scale = Math.max(0.05, ((1 - lifeRatio) / 0.28) * 1.1)
+        scale = Math.max(0.05, ((1 - lifeRatio) / 0.28) * 1.3)
       } else {
-        scale = 1.1 + lifeRatio * 0.35
+        scale = 1.25 + lifeRatio * 0.2
       }
 
       DUMMY.position.set(stink.posX[i] ?? 0, stink.posY[i] ?? 0, stink.posZ[i] ?? 0)
