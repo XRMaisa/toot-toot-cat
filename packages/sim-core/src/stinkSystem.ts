@@ -38,11 +38,11 @@ export const MAX_STINK_PARTICLES = 3000
 const EMIT_RATE = 75 // 持續按住時每秒產生粒子數
 const INITIAL_BURST_COUNT = 32 // 一開始放屁瞬間爆出至少 2×2 範圍的初始濃雲
 const INITIAL_SPREAD_RADIUS = 1.0 // 2×2 格子半徑（直徑 = 2 格）
-const PARTICLE_MIN_LIFE = 7.5
-const PARTICLE_MAX_LIFE = 11.0
-const DIFFUSION_STRENGTH = 2.8 // 隨機擴散加速度
-const DRAG = 1.5 // 空氣阻力
-const BASE_BUOYANCY = 0.22 // 輕微自然上升
+const PARTICLE_MIN_LIFE = 20.0
+const PARTICLE_MAX_LIFE = 30.0
+const DIFFUSION_STRENGTH = 18.0 // 隨機擴散加速度（加快飄散）
+const DRAG = 0.65 // 空氣阻力（降低阻力讓臭氣飄更遠）
+const BASE_BUOYANCY = 1.6 // 自然上升浮力
 const BOUNCE_DAMPING = 0.45
 
 const SUSPICION_PER_PARTICLE = 3.2
@@ -313,13 +313,13 @@ export class StinkSystem {
     sy = Math.min(GRID.NY - 0.05, Math.max(0.05, sy))
     sz = Math.min(GRID.NZ - 0.05, Math.max(0.05, sz))
 
-    const baseSpeed = isBurst ? 1.5 + this.rng() * 1.1 : 1.2 + this.rng() * 0.9
-    const radialBoost = isBurst ? 1.1 : 0.7
+    const baseSpeed = isBurst ? 4.8 + this.rng() * 3.2 : 3.6 + this.rng() * 2.4
+    const radialBoost = isBurst ? 3.5 : 2.2
     this.posX[slot] = sx
     this.posY[slot] = sy
     this.posZ[slot] = sz
     this.velX[slot] = emit.dirX * baseSpeed + Math.cos(angle) * radialBoost
-    this.velY[slot] = 0.25 + this.rng() * 0.55
+    this.velY[slot] = 0.8 + this.rng() * 1.4
     this.velZ[slot] = emit.dirZ * baseSpeed + Math.sin(angle) * radialBoost
     this.age[slot] = 0
     this.maxAge[slot] =
