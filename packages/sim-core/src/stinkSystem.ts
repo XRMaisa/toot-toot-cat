@@ -35,12 +35,12 @@ export interface StinkSnapshot {
 
 export const MAX_STINK_PARTICLES = 3000
 
-const EMIT_RATE = 75 // 持續按住時每秒產生粒子數
-const INITIAL_BURST_COUNT = 32 // 一開始放屁瞬間爆出至少 2×2 範圍的初始濃雲
+const EMIT_RATE = 110 // 持續按住時每秒產生粒子數
+const INITIAL_BURST_COUNT = 80 // 一開始放屁瞬間爆出高濃度的 2×2 濃雲
 const INITIAL_SPREAD_RADIUS = 1.0 // 2×2 格子半徑（直徑 = 2 格）
 const PARTICLE_MIN_LIFE = 20.0
 const PARTICLE_MAX_LIFE = 30.0
-const DIFFUSION_STRENGTH = 18.0 // 隨機擴散加速度（加快飄散）
+const DIFFUSION_STRENGTH = 10.0 // 隨機擴散加速度
 const DRAG = 0.65 // 空氣阻力（降低阻力讓臭氣飄更遠）
 const BASE_BUOYANCY = 1.6 // 自然上升浮力
 const BOUNCE_DAMPING = 0.45
@@ -313,8 +313,8 @@ export class StinkSystem {
     sy = Math.min(GRID.NY - 0.05, Math.max(0.05, sy))
     sz = Math.min(GRID.NZ - 0.05, Math.max(0.05, sz))
 
-    const baseSpeed = isBurst ? 4.8 + this.rng() * 3.2 : 3.6 + this.rng() * 2.4
-    const radialBoost = isBurst ? 3.5 : 2.2
+    const baseSpeed = isBurst ? 3.0 + this.rng() * 2.0 : 2.4 + this.rng() * 1.6
+    const radialBoost = isBurst ? 2.2 : 1.5
     this.posX[slot] = sx
     this.posY[slot] = sy
     this.posZ[slot] = sz
