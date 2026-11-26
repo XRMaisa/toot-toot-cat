@@ -523,13 +523,18 @@ export class ThreeStage {
     const { x, y, z } = frame.cat.position
     this.catRig.group.position.set(x, y, z)
     this.catRig.group.rotation.y = frame.cat.facingYaw
-    this.catRig.setFarting(frame.cat.isFarting)
+    this.catRig.setBellyVisual(
+      frame.cat.isFarting,
+      frame.game.bellyPressure,
+      frame.game.isForcedBurst,
+      frame.timeSec,
+    )
     this.catRig.setShadowSurfaceY(y, this.findSurfaceYBelowCat(x, y, z))
 
     this.humanRig?.updateState(frame.human, frame.timeSec)
     this.humanRig?.setAlert(frame.stink.alertLevel)
     this.deviceVisuals.update(frame.devices, dt)
-    this.stinkVisuals.update(this.world.stink)
+    this.stinkVisuals.update(this.world.stink, frame.game.level)
 
     // 3. 鏡頭跟隨貓咪
     const dx = x - this.prevCatPos.x

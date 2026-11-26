@@ -124,7 +124,12 @@ function createEmojiSpriteTexture(symbol: string, bgColor: string): THREE.Canvas
 
 export interface CatMeshRig {
   readonly group: THREE.Group
-  setFarting(active: boolean): void
+  setBellyVisual(
+    active: boolean,
+    bellyPressure: number,
+    isForcedBurst: boolean,
+    timeSec: number,
+  ): void
   /** 更新貓咪腳下固定陰影的落點高度（讓跳躍時能清楚看出落點） */
   setShadowSurfaceY(catY: number, surfaceY: number): void
 }
@@ -169,9 +174,31 @@ export function createCatMesh(entity: GridEntity): CatMeshRig {
 
   return {
     group,
-    setFarting(active: boolean) {
-      bodyMat.emissive.setHex(active ? 0x4d7c0f : 0x000000)
-      body.scale.set(active ? 1.08 : 1, active ? 0.92 : 1, active ? 1.08 : 1)
+    setBellyVisual(
+      active: boolean,
+      bellyPressure: number,
+      isForcedBurst: boolean,
+      timeSec: number,
+    ) {
+      // 肚子脹氣越高越膨脹，>= 75% 微微發抖提示快忍不住了
+      const bloat = 1 + (bellyPressure / 100) * 0.26
+      const wobble =
+        isForcedBurst || bellyPressure >= 75
+          ? Math.sin(timeSec * (isForcedBurst ? 36 : 22)) * (isForcedBurst ? 0.1 : 0.05)
+          : 0
+      const sx = (active ? 1.06 : 1) * bloat + wobble
+      const sy = (active ? 0.92 : 1) * (1 + (bellyPressure / 100) * 0.12) - wobble * 0.5
+      body.scale.set(sx, sy, sx)
+
+      if (isForcedBurst) {
+        bodyMat.emissive.setHex(0xb91c1c)
+      } else if (active) {
+        bodyMat.emissive.setHex(0x4d7c0f)
+      } else if (bellyPressure >= 80) {
+        bodyMat.emissive.setHex(0x7c2d12)
+      } else {
+        bodyMat.emissive.setHex(0x000000)
+      }
     },
     setShadowSurfaceY(catY: number, surfaceY: number) {
       const heightAbove = Math.max(0, catY - surfaceY)

@@ -48,19 +48,36 @@ const deviceState = ref<DeviceState>({
   windowOpen: false,
   doorOpen: false,
 })
+const BEST_SCORE_KEY = 'toot-toot-cat:best-score'
+
+function readBestScore(): number {
+  try {
+    const raw = window.localStorage.getItem(BEST_SCORE_KEY)
+    const num = raw ? Number(raw) : 0
+    return Number.isFinite(num) && num > 0 ? Math.floor(num) : 0
+  } catch {
+    return 0
+  }
+}
+
+const bestScore = ref(readBestScore())
+const isNewBest = ref(false)
+
 const gameState = ref<GameLoopSnapshot>({
   phase: 'playing',
   elapsedSec: 0,
-  fartQuota: LEVEL_01.fartQuota,
-  fartRemaining: LEVEL_01.fartQuota,
-  fartProgress: 0,
+  level: 1,
+  potencyMultiplier: 1,
+  humanSpeedMultiplier: 1,
+  humanActivityDuration: 5,
+  bellyPressure: 20,
+  isForcedBurst: false,
+  forcedBurstRemaining: 0,
+  comboMultiplier: 1,
   fartPresses: 0,
-  parTime: LEVEL_01.parTime,
-  parPresses: LEVEL_01.parPresses,
+  totalExhausted: 0,
   maxSuspicion: 0,
-  safeCountdownSec: 3,
-  score: 1000,
-  stars: 2,
+  score: 0,
 })
 
 const editorMode = ref(false)
@@ -124,6 +141,7 @@ function toggleHeatmap(): void {
 }
 
 function restartGame(): void {
+  isNewBest.value = false
   stage?.restart()
 }
 
@@ -155,6 +173,15 @@ onMounted(() => {
     },
     onGameState: (g) => {
       gameState.value = g
+      if (g.phase === 'lost' && g.score > bestScore.value) {
+        bestScore.value = g.score
+        isNewBest.value = true
+        try {
+          window.localStorage.setItem(BEST_SCORE_KEY, String(g.score))
+        } catch {
+          // 忽略無痕模式儲存失敗
+        }
+      }
     },
     onLevelChange: (lvl) => {
       currentLevel.value = lvl
@@ -177,7 +204,7 @@ onBeforeUnmount(() => stage?.dispose())
 
     <!-- 遊玩模式 HUD -->
     <template v-if="!editorMode">
-      <GameHud :game="gameState" />
+      <GameHud :game="gameState" :best-score="bestScore" />
 
       <!-- 左上角：人類懷疑值、AI 狀態與效能除錯資訊（手機小螢幕隱藏避免遮擋與多層合成） -->
       <div
@@ -313,12 +340,18 @@ onBeforeUnmount(() => stage?.dispose())
     <DevicePanel v-if="!editorMode" :devices="deviceState" @toggle="toggleDevice" />
 
     <!-- 手機／測試用虛擬搖桿與按鈕 -->
-    <TouchControls v-if="!editorMode && showTouchControls && gameState.phase !== 'won' && gameState.phase !== 'lost'"
+    <TouchControls v-if="!editorMode && showTouchControls && gameState.phase !== 'lost'"
       @move="(r, f) => stage?.setVirtualMove(r, f)" @jump="stage?.triggerJump()"
       @fart="(held) => stage?.setVirtualFart(held)" />
 
-    <!-- 過關 / 失敗結算彈窗 -->
-    <ResultModal v-if="!editorMode" :game="gameState" @restart="restartGame" />
+    <!-- 失敗結算彈窗（最高分紀錄） -->
+    <ResultModal
+      v-if="!editorMode"
+      :game="gameState"
+      :best-score="bestScore"
+      :is-new-best="isNewBest"
+      @restart="restartGame"
+    />
 
     <!-- 手機 WebGL 上下文遺失提示 -->
     <div v-if="webglLost"

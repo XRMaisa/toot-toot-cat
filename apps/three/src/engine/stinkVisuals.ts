@@ -12,20 +12,22 @@ const TMP_COLOR = new THREE.Color()
 export class StinkVisuals {
   readonly group = new THREE.Group()
   private readonly particleMesh: THREE.InstancedMesh
+  private readonly particleMat: THREE.MeshBasicMaterial
   private readonly heatmapMesh: THREE.InstancedMesh
   private lastParticleCount = -1
   private lastHeatmapCount = -1
+  private lastLevel = -1
 
   constructor() {
-    // 1. 柔和黃綠色臭氣雲粒子（一開始就大顆蓬鬆）
+    // 1. 柔和黃綠色臭氣雲粒子（一開始就大顆蓬鬆，隨等級越變越毒）
     const particleGeo = new THREE.SphereGeometry(0.28, 8, 6)
-    const particleMat = new THREE.MeshBasicMaterial({
+    this.particleMat = new THREE.MeshBasicMaterial({
       color: 0xa3e635,
       transparent: true,
       opacity: 0.42,
       depthWrite: false,
     })
-    this.particleMesh = new THREE.InstancedMesh(particleGeo, particleMat, MAX_STINK_PARTICLES)
+    this.particleMesh = new THREE.InstancedMesh(particleGeo, this.particleMat, MAX_STINK_PARTICLES)
     this.particleMesh.count = 0
     this.particleMesh.frustumCulled = false
     this.group.add(this.particleMesh)
@@ -49,7 +51,16 @@ export class StinkVisuals {
     this.heatmapMesh.visible = visible
   }
 
-  update(stink: StinkSystem): void {
+  update(stink: StinkSystem, level = 1): void {
+    // 隨無盡難度等級改變臭氣顏色（黃綠 → 濃毒綠 → 毒紫綠）
+    if (level !== this.lastLevel) {
+      this.lastLevel = level
+      const hue = Math.max(0.22, 0.25 + Math.min(4, level - 1) * 0.12) % 1
+      const sat = Math.min(0.95, 0.75 + (level - 1) * 0.05)
+      const light = Math.max(0.42, 0.56 - (level - 1) * 0.03)
+      this.particleMat.color.setHSL(hue, sat, light)
+    }
+
     // 更新粒子 InstancedMesh
     let pCount = 0
     for (let i = 0; i < stink.capacity; i++) {

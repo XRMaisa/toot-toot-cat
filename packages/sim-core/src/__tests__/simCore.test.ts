@@ -149,30 +149,46 @@ describe('StinkSystem + DeviceSystem + Seeded RNG', () => {
   })
 })
 
-describe('GameLoop', () => {
-  it('wins after draining quota and surviving 3s safe check', () => {
-    const loop = new GameLoop({ ...LEVEL_01, fartQuota: 20 }) // 1 秒放完
+describe('GameLoop (Endless Mode)', () => {
+  it('builds belly pressure when holding back and triggers forced mega-burst at 100%', () => {
+    const loop = new GameLoop()
     let snap = loop.getSnapshot()
 
-    for (let i = 0; i < 25; i++) {
-      snap = loop.step(true, 10, 0.05)
+    // 忍住不放屁約 12 秒，肚子脹氣應達到 100% 並觸發強制大爆屁
+    for (let i = 0; i < 240; i++) {
+      snap = loop.step(false, 10, 0, 0.05)
+      if (snap.isForcedBurst) break
     }
-    expect(snap.phase).toBe('safeCheck')
-    expect(snap.fartPresses).toBe(1)
-
-    for (let i = 0; i < 65; i++) {
-      snap = loop.step(false, 10, 0.05)
-    }
-    expect(snap.phase).toBe('won')
-    expect(snap.stars).toBe(3)
+    expect(snap.isForcedBurst).toBe(true)
+    expect(snap.forcedBurstRemaining).toBeGreaterThan(0)
   })
 
-  it('loses immediately when suspicion reaches 70', () => {
-    const loop = new GameLoop(LEVEL_01)
-    const snap = loop.step(true, 70, 0.05)
-    expect(snap.phase).toBe('lost')
-    expect(snap.score).toBe(0)
-    expect(snap.stars).toBe(0)
+  it('drains belly pressure and scores combo points while voluntarily farting', () => {
+    const loop = new GameLoop()
+    const before = loop.getSnapshot().bellyPressure
+    let snap = loop.getSnapshot()
+    for (let i = 0; i < 20; i++) {
+      snap = loop.step(true, 10, 2, 0.05)
+    }
+    expect(snap.bellyPressure).toBeLessThan(before)
+    expect(snap.comboMultiplier).toBeGreaterThan(1)
+    expect(snap.score).toBeGreaterThan(50)
+    expect(snap.totalExhausted).toBe(40)
+  })
+
+  it('escalates difficulty level and potency over time and ends when suspicion reaches 70', () => {
+    const loop = new GameLoop()
+    let snap = loop.getSnapshot()
+    // 撐過 25 秒（500 * 0.05s）應升至 Lv.2 且濃度 > 1.0x
+    for (let i = 0; i < 500; i++) {
+      snap = loop.step(i % 4 === 0, 10, 0, 0.05)
+    }
+    expect(snap.level).toBeGreaterThanOrEqual(2)
+    expect(snap.potencyMultiplier).toBeGreaterThan(1)
+
+    const lost = loop.step(false, 70, 0, 0.05)
+    expect(lost.phase).toBe('lost')
+    expect(lost.score).toBeGreaterThan(0)
   })
 })
 

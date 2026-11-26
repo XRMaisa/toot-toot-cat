@@ -3,6 +3,8 @@ import type { GameLoopSnapshot } from '@toot/sim-core'
 
 defineProps<{
   game: GameLoopSnapshot
+  bestScore: number
+  isNewBest: boolean
 }>()
 
 const emit = defineEmits<{
@@ -12,64 +14,54 @@ const emit = defineEmits<{
 
 <template>
   <div
-    v-if="game.phase === 'won' || game.phase === 'lost'"
-    class="absolute inset-0 z-30 flex items-center justify-center bg-slate-950/65 backdrop-blur-sm"
+    v-if="game.phase === 'lost'"
+    class="absolute inset-0 z-30 flex items-center justify-center bg-slate-950/75 p-4"
   >
     <div
-      class="w-88 rounded-2xl border p-6 text-center shadow-2xl"
-      :class="
-        game.phase === 'won'
-          ? 'border-emerald-400/50 bg-slate-900/95'
-          : 'border-rose-500/50 bg-slate-900/95'
-      "
+      class="w-88 rounded-2xl border border-rose-500/50 bg-slate-900/95 p-6 text-center shadow-2xl"
     >
-      <template v-if="game.phase === 'won'">
-        <p class="text-3xl">🎉</p>
-        <h2 class="mt-1 text-xl font-bold text-emerald-300">完美偷放過關！</h2>
-        <div class="mt-3 flex justify-center gap-1 text-2xl">
-          <span v-for="n in 3" :key="n" :class="n <= game.stars ? 'opacity-100' : 'opacity-20'">
-            ⭐
-          </span>
-        </div>
-        <p class="mt-2 font-mono text-3xl font-extrabold text-amber-300">{{ game.score }} 分</p>
-      </template>
+      <p class="text-3xl">💢</p>
+      <h2 class="mt-1 text-xl font-bold text-rose-400">被抓到了！</h2>
+      <p class="mt-1 text-xs text-slate-400">人類懷疑值突破 70%（無盡挑戰結算）</p>
 
-      <template v-else>
-        <p class="text-3xl">💢</p>
-        <h2 class="mt-1 text-xl font-bold text-rose-400">被抓到了！</h2>
-        <p class="mt-1 text-xs text-slate-400">人類懷疑值突破 70%（之後會補上貓被踢出門動畫）</p>
-      </template>
+      <div class="mt-4">
+        <span
+          v-if="isNewBest"
+          class="inline-block rounded-full bg-amber-500/20 px-3 py-0.5 text-xs font-bold text-amber-300"
+        >
+          🏆 破紀錄 NEW BEST!
+        </span>
+        <p class="mt-1 font-mono text-4xl font-extrabold text-amber-300">{{ game.score }}</p>
+        <p class="mt-1 text-xs text-slate-400">
+          歷史最高分：<span class="font-mono font-bold text-emerald-300">{{ bestScore }}</span>
+        </p>
+      </div>
 
       <div class="mt-5 grid grid-cols-3 gap-2 rounded-xl bg-slate-950/70 p-3 text-xs">
         <div>
-          <p class="text-slate-400">用時</p>
+          <p class="text-slate-400">撐過時間</p>
           <p class="mt-0.5 font-mono text-sm font-bold text-white">
             {{ game.elapsedSec.toFixed(1) }}s
           </p>
         </div>
         <div>
-          <p class="text-slate-400">放屁次數</p>
-          <p class="mt-0.5 font-mono text-sm font-bold text-sky-300">{{ game.fartPresses }} 次</p>
+          <p class="text-slate-400">達到等級</p>
+          <p class="mt-0.5 font-mono text-sm font-bold text-lime-300">Lv.{{ game.level }}</p>
         </div>
         <div>
-          <p class="text-slate-400">最高懷疑</p>
-          <p class="mt-0.5 font-mono text-sm font-bold text-amber-300">
-            {{ Math.round(game.maxSuspicion) }}%
+          <p class="text-slate-400">排氣顆數</p>
+          <p class="mt-0.5 font-mono text-sm font-bold text-emerald-300">
+            {{ game.totalExhausted }}
           </p>
         </div>
       </div>
 
       <button
         type="button"
-        class="mt-5 w-full cursor-pointer rounded-xl px-4 py-2.5 text-sm font-bold text-white transition active:scale-98"
-        :class="
-          game.phase === 'won'
-            ? 'bg-emerald-600 hover:bg-emerald-500'
-            : 'bg-rose-600 hover:bg-rose-500'
-        "
+        class="mt-5 w-full cursor-pointer rounded-xl bg-rose-600 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-rose-500 active:scale-98"
         @click="emit('restart')"
       >
-        {{ game.phase === 'won' ? '再玩一次' : '重新挑戰' }}
+        再衝一次最高分
       </button>
     </div>
   </div>

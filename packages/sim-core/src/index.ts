@@ -52,6 +52,7 @@ export {
   type HumanAlertLevel,
   type StinkEmitParams,
   type StinkSnapshot,
+  type StinkStepOptions,
 } from './stinkSystem'
 
 export {
@@ -64,6 +65,7 @@ export {
   HUMAN_ACTIVITY_LABELS,
   HumanController,
   type HumanActivity,
+  type HumanDifficulty,
   type HumanPosture,
   type HumanState,
 } from './humanController'

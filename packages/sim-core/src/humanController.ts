@@ -32,6 +32,11 @@ export interface HumanState {
   readonly releaseCatCell: Readonly<GridCoord> | null
 }
 
+export interface HumanDifficulty {
+  readonly speedMultiplier?: number
+  readonly activityDuration?: number
+}
+
 const STAND_FOOTPRINT = boxFootprint(1, 3, 1)
 const SIT_FOOTPRINT = boxFootprint(1, 2, 1)
 const SLEEP_FOOTPRINT = boxFootprint(1, 1, 3)
@@ -104,8 +109,18 @@ export class HumanController {
     }
   }
 
-  step(catPos: Readonly<Vec3>, catGrounded: boolean, rawDt: number): HumanState {
+  private currentSpeedMultiplier = 1
+  private currentActivityDuration = ACTIVITY_DURATION
+
+  step(
+    catPos: Readonly<Vec3>,
+    catGrounded: boolean,
+    rawDt: number,
+    difficulty?: HumanDifficulty,
+  ): HumanState {
     const dt = Math.min(Math.max(rawDt, 0), 0.05)
+    this.currentSpeedMultiplier = difficulty?.speedMultiplier ?? 1
+    this.currentActivityDuration = difficulty?.activityDuration ?? ACTIVITY_DURATION
     let releaseCatCell: GridCoord | null = null
 
     if (this.petCooldown > 0) {
@@ -256,7 +271,7 @@ export class HumanController {
       this.facingYaw = Math.atan2(dx, dz)
     }
 
-    const stepDist = HUMAN_WALK_SPEED * dt
+    const stepDist = HUMAN_WALK_SPEED * this.currentSpeedMultiplier * dt
     if (dist <= stepDist) {
       this.pos.x = tx
       this.pos.y = 0
@@ -283,7 +298,7 @@ export class HumanController {
 
   private onArrivedAtTarget(): void {
     this.isMoving = false
-    this.actionTimer = ACTIVITY_DURATION
+    this.actionTimer = this.currentActivityDuration
 
     if (!this.currentTarget) return
 

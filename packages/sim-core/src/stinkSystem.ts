@@ -24,6 +24,13 @@ export interface StinkEmitParams {
   readonly dirZ: number
 }
 
+export interface StinkStepOptions {
+  /** 臭味濃度倍率（隨無盡模式等級提升，預設 1.0） */
+  readonly potencyMultiplier?: number
+  /** 是否正處於肚子脹爆的「強制大爆屁」狀態 */
+  readonly forcedBurst?: boolean
+}
+
 export interface StinkSnapshot {
   readonly activeParticles: number
   readonly suspicion: number
@@ -37,6 +44,7 @@ export const MAX_STINK_PARTICLES = 3000
 
 const EMIT_RATE = 140 // 持續按住時每秒產生粒子數
 const INITIAL_BURST_COUNT = 150 // 一開始放屁瞬間爆出高濃度的 2×2 濃雲
+const FORCED_MEGA_BURST_COUNT = 220 // 肚子脹到 100% 強制大爆屁瞬間爆出超濃毒雲
 const INITIAL_SPREAD_RADIUS = 1.0 // 2×2 格子半徑（直徑 = 2 格）
 const PARTICLE_MIN_LIFE = 20.0
 const PARTICLE_MAX_LIFE = 30.0
@@ -74,6 +82,7 @@ export class StinkSystem {
   private activeCount = 0
   private emitCarry = 0
   private wasEmitting = false
+  private wasForcedBurst = false
   private suspicion = 0
   private totalInhaled = 0
   private totalExhausted = 0
@@ -92,6 +101,7 @@ export class StinkSystem {
     this.activeCount = 0
     this.emitCarry = 0
     this.wasEmitting = false
+    this.wasForcedBurst = false
     this.suspicion = 0
     this.totalInhaled = 0
     this.totalExhausted = 0
@@ -122,21 +132,32 @@ export class StinkSystem {
     humanHeadCell: Readonly<GridCoord>,
     rawDt: number,
     devices?: DeviceSystem,
+    options?: StinkStepOptions,
   ): StinkSnapshot {
     const dt = Math.min(Math.max(rawDt, 0), 0.05)
+    const potency = options?.potencyMultiplier ?? 1
+    const forcedBurst = options?.forcedBurst ?? false
 
-    // 1. 產生新粒子（一開始放屁立刻爆出至少 2×2 範圍的濃雲，按住時持續維持 2×2 寬幅擴散）
-    if (emit.active) {
-      if (!this.wasEmitting) {
+    // 1. 產生新粒子（一開始放屁爆出 2×2 濃雲；肚子脹爆則觸發超濃強制大爆屁）
+    if (forcedBurst && !this.wasForcedBurst) {
+      for (let i = 0; i < FORCED_MEGA_BURST_COUNT; i++) {
+        this.spawnParticle(grid, emit, true, 1.35)
+      }
+    }
+    this.wasForcedBurst = forcedBurst
+
+    if (emit.active || forcedBurst) {
+      if (!this.wasEmitting && !forcedBurst) {
         for (let i = 0; i < INITIAL_BURST_COUNT; i++) {
-          this.spawnParticle(grid, emit, true)
+          this.spawnParticle(grid, emit, true, 1.0)
         }
       }
-      this.emitCarry += EMIT_RATE * dt
+      const rate = forcedBurst ? EMIT_RATE * 1.6 : EMIT_RATE * Math.min(1.8, 0.85 + potency * 0.15)
+      this.emitCarry += rate * dt
       const toSpawn = Math.floor(this.emitCarry)
       this.emitCarry -= toSpawn
       for (let i = 0; i < toSpawn; i++) {
-        this.spawnParticle(grid, emit, false)
+        this.spawnParticle(grid, emit, false, forcedBurst ? 1.2 : 1.0)
       }
       this.wasEmitting = true
     } else {
@@ -269,10 +290,13 @@ export class StinkSystem {
     this.totalExhausted += exhaustedNow
     this.maxCellCount = peakCell
 
-    // 3. 更新懷疑值（0 ~ 100）
+    // 3. 更新懷疑值（0 ~ 100，隨難度等級濃度倍率提升）
     if (inhaledNow > 0) {
       this.totalInhaled += inhaledNow
-      this.suspicion = Math.min(100, this.suspicion + inhaledNow * SUSPICION_PER_PARTICLE)
+      this.suspicion = Math.min(
+        100,
+        this.suspicion + inhaledNow * SUSPICION_PER_PARTICLE * potency,
+      )
     } else if (this.suspicion > 0) {
       this.suspicion = Math.max(0, this.suspicion - SUSPICION_DECAY_PER_SEC * dt)
     }
@@ -287,13 +311,18 @@ export class StinkSystem {
     return grid.isSolidForSmell(cx, cy, cz)
   }
 
-  private spawnParticle(grid: OccupancyGrid, emit: StinkEmitParams, isBurst: boolean): void {
+  private spawnParticle(
+    grid: OccupancyGrid,
+    emit: StinkEmitParams,
+    isBurst: boolean,
+    spreadScale = 1.0,
+  ): void {
     const slot = this.findFreeSlot()
     if (slot < 0) return
 
     // 在至少 2×2 格子（直徑 2 單位）的水平圓盤內均勻分布
     const angle = this.rng() * Math.PI * 2
-    const maxR = isBurst ? INITIAL_SPREAD_RADIUS : INITIAL_SPREAD_RADIUS * 0.85
+    const maxR = (isBurst ? INITIAL_SPREAD_RADIUS : INITIAL_SPREAD_RADIUS * 0.85) * spreadScale
     const r = Math.sqrt(this.rng()) * maxR
     const offX = Math.cos(angle) * r
     const offZ = Math.sin(angle) * r

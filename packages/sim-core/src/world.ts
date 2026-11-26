@@ -101,7 +101,7 @@ export class SimulationWorld {
       this.loaded.cat,
       this.rng,
     )
-    this.gameLoop = new GameLoop(levelData)
+    this.gameLoop = new GameLoop()
     this.stinkSystem = new StinkSystem(this.rng)
     this.deviceSystem.reset()
 
@@ -134,11 +134,18 @@ export class SimulationWorld {
 
     this.simTimeSec += dt
 
-    // 1. 人類 AI 步進與摸貓互動協調
+    const diff = this.gameLoop.getDifficulty()
+    const forcedBurst = this.gameLoop.isForcedBurst()
+
+    // 1. 人類 AI 步進與摸貓互動協調（隨無盡等級加速）
     const humanState = this.humanController.step(
       this.lastCatState.position,
       this.lastCatState.grounded,
       dt,
+      {
+        speedMultiplier: diff.humanSpeedMultiplier,
+        activityDuration: diff.humanActivityDuration,
+      },
     )
     const isBeingPetted = humanState.petCatHoldPos !== null
 
@@ -159,13 +166,13 @@ export class SimulationWorld {
       )
     }
 
-    // 2. 貓咪移動、跳躍與格子碰撞（額度放完時禁止再放屁；被摸時鎖定）
+    // 2. 貓咪移動、跳躍與格子碰撞（強制大爆屁時就算沒按空白鍵也會噴屁）
     const catState = this.catController.step(
       {
         moveX: input.moveX,
         moveZ: input.moveZ,
         jumpJustPressed: input.jumpJustPressed,
-        fartHeld: input.fartHeld && this.gameLoop.canEmitFart(),
+        fartHeld: input.fartHeld || forcedBurst,
         locked: isBeingPetted,
       },
       dt,
@@ -174,7 +181,8 @@ export class SimulationWorld {
     // 3. 房間設備（風扇擺頭等）
     const deviceState = this.deviceSystem.step(dt)
 
-    // 4. 臭氣粒子模擬（從貓屁股噴出、受設備氣流與排氣影響、由人類頭部吸入）
+    // 4. 臭氣粒子模擬（隨等級越來越濃，強制大爆屁會爆出超濃毒雲）
+    const prevExhausted = this.stinkSystem.getSnapshot().totalExhausted
     const backX = -Math.sin(catState.facingYaw)
     const backZ = -Math.cos(catState.facingYaw)
     const stinkSnapshot = this.stinkSystem.step(
@@ -190,10 +198,21 @@ export class SimulationWorld {
       humanState.headCell,
       dt,
       this.deviceSystem,
+      {
+        potencyMultiplier: diff.potencyMultiplier,
+        forcedBurst,
+      },
     )
+    const exhaustedDelta = stinkSnapshot.totalExhausted - prevExhausted
 
-    // 5. 關卡循環（屁額度、計時、3 秒安全判定、勝負與計分）
-    const gameSnapshot = this.gameLoop.step(catState.isFarting, stinkSnapshot.suspicion, dt)
+    // 5. 無盡模式循環（肚子脹氣、強制大爆屁、動態難度與連擊計分）
+    const voluntaryFarting = input.fartHeld && !isBeingPetted && !forcedBurst
+    const gameSnapshot = this.gameLoop.step(
+      voluntaryFarting,
+      stinkSnapshot.suspicion,
+      exhaustedDelta,
+      dt,
+    )
 
     this.lastCatState = catState
     this.lastHumanState = humanState

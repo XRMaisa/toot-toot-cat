@@ -4,6 +4,7 @@ import type { GameLoopSnapshot } from '@toot/sim-core'
 
 const props = defineProps<{
   game: GameLoopSnapshot
+  bestScore: number
 }>()
 
 const formattedTime = computed(() => {
@@ -13,58 +14,94 @@ const formattedTime = computed(() => {
   return `${String(mins).padStart(2, '0')}:${rem.toFixed(1).padStart(4, '0')}`
 })
 
-const progressPct = computed(() => Math.round(props.game.fartProgress * 100))
+const bellyPct = computed(() => Math.round(props.game.bellyPressure))
+
+const bellyBarClass = computed(() => {
+  if (props.game.isForcedBurst || props.game.bellyPressure >= 80) {
+    return 'bg-gradient-to-r from-orange-500 to-rose-500'
+  }
+  if (props.game.bellyPressure >= 55) {
+    return 'bg-gradient-to-r from-amber-400 to-orange-400'
+  }
+  return 'bg-gradient-to-r from-lime-400 to-emerald-400'
+})
 </script>
 
 <template>
   <div class="pointer-events-none absolute left-1/2 top-4 flex -translate-x-1/2 flex-col items-center gap-2">
-    <!-- 主計時與計分條 -->
+    <!-- 主無盡高分面板 -->
     <div
-      class="flex items-center gap-3 rounded-2xl border border-slate-700/80 bg-slate-950/85 px-4 py-2 text-xs text-slate-200 shadow-xl md:gap-5 md:px-5 md:py-2.5 md:backdrop-blur">
-      <!-- 計時 -->
+      class="flex items-center gap-3 rounded-2xl border border-slate-700/80 bg-slate-950/88 px-4 py-2 text-xs text-slate-200 shadow-xl md:gap-5 md:px-5 md:py-2.5 md:backdrop-blur"
+    >
+      <!-- 難度等級與時間 -->
       <div class="flex flex-col items-center">
-        <span class="text-[10px] text-slate-400">時間</span>
-        <span class="font-mono text-base font-bold text-white">{{ formattedTime }}</span>
+        <span class="text-[10px] font-bold text-lime-300">
+          Lv.{{ game.level }} · 濃度 {{ game.potencyMultiplier.toFixed(2) }}x
+        </span>
+        <span class="font-mono text-sm font-bold text-white">{{ formattedTime }}</span>
       </div>
 
       <div class="h-7 w-px bg-slate-700/80" />
 
-      <!-- 屁額度進度條 -->
-      <div class="flex w-36 flex-col gap-1">
+      <!-- 肚子脹氣條（滿 100% 強制大爆屁） -->
+      <div class="flex w-32 flex-col gap-1 md:w-40">
         <div class="flex items-center justify-between text-[10px]">
-          <span class="text-slate-300">💨 屁額度</span>
-          <span class="font-mono font-bold text-lime-300">{{ progressPct }}%</span>
+          <span
+            class="font-medium"
+            :class="bellyPct >= 80 || game.isForcedBurst ? 'text-rose-300 font-bold' : 'text-slate-300'"
+          >
+            {{ game.isForcedBurst ? '💥 爆屁中' : '🫄 肚子脹氣' }}
+          </span>
+          <span class="font-mono font-bold text-white">{{ bellyPct }}%</span>
         </div>
         <div class="h-2.5 w-full overflow-hidden rounded-full bg-slate-800">
-          <div class="h-full rounded-full bg-gradient-to-r from-lime-400 to-emerald-400 transition-all duration-100"
-            :style="{ width: `${progressPct}%` }" />
+          <div
+            class="h-full rounded-full transition-all duration-100"
+            :class="bellyBarClass"
+            :style="{ width: `${Math.min(100, bellyPct)}%` }"
+          />
         </div>
       </div>
 
       <div class="h-7 w-px bg-slate-700/80" />
 
-      <!-- 放屁次數 -->
+      <!-- 目前分數與連放 Combo -->
       <div class="flex flex-col items-center">
-        <span class="text-[10px] text-slate-400">次數 (標準 {{ game.parPresses }})</span>
-        <span class="font-mono text-base font-bold"
-          :class="game.fartPresses <= game.parPresses ? 'text-sky-300' : 'text-amber-300'">
-          {{ game.fartPresses }}
-        </span>
+        <div class="flex items-center gap-1 text-[10px] text-slate-400">
+          <span>分數</span>
+          <span
+            v-if="game.comboMultiplier > 1.05"
+            class="rounded bg-amber-500/25 px-1 font-mono font-bold text-amber-300"
+          >
+            x{{ game.comboMultiplier.toFixed(1) }}
+          </span>
+        </div>
+        <span class="font-mono text-base font-extrabold text-amber-300">{{ game.score }}</span>
       </div>
 
-      <div class="h-7 w-px bg-slate-700/80" />
+      <div class="hidden h-7 w-px bg-slate-700/80 md:block" />
 
-      <!-- 預估分數 -->
-      <div class="flex flex-col items-center">
-        <span class="text-[10px] text-slate-400">預估分數</span>
-        <span class="font-mono text-base font-bold text-amber-300">{{ game.score }}</span>
+      <!-- 歷史最高分 -->
+      <div class="hidden flex-col items-center md:flex">
+        <span class="text-[10px] text-slate-400">🏆 最高分</span>
+        <span class="font-mono text-sm font-bold text-emerald-300">
+          {{ Math.max(bestScore, game.score) }}
+        </span>
       </div>
     </div>
 
-    <!-- 放完屁後的 3 秒安全判定倒數 -->
-    <div v-if="game.phase === 'safeCheck'"
-      class="animate-pulse rounded-full border border-emerald-400/70 bg-emerald-950/85 px-4 py-1 text-xs font-bold text-emerald-200 shadow-lg backdrop-blur">
-      ⏳ 額度已放完！撐住別被聞到：{{ game.safeCountdownSec.toFixed(1) }}s
+    <!-- 強制大爆屁警告橫幅 -->
+    <div
+      v-if="game.isForcedBurst"
+      class="animate-pulse rounded-full border border-rose-400/80 bg-rose-950/90 px-4 py-1 text-xs font-bold text-rose-200 shadow-lg"
+    >
+      💥 忍太久肚子脹爆！強制大爆屁中（{{ game.forcedBurstRemaining.toFixed(1) }}s）
+    </div>
+    <div
+      v-else-if="bellyPct >= 80"
+      class="rounded-full border border-amber-400/70 bg-amber-950/85 px-3.5 py-0.5 text-[11px] font-bold text-amber-200"
+    >
+      ⚠️ 快忍不住了！趕快找安全角落放屁洩壓！
     </div>
   </div>
 </template>
